@@ -26,10 +26,10 @@ const donorSchema = new mongoose.Schema({
     default: ''
   },
 
-  // Mobile network
+  // Mobile network (MTN, Telecel, AirtelTigo)
   network: {
     type: String,
-    enum: ['mtn', 'vodafone', 'airtel', 'tigo', 'unknown'],
+    enum: ['mtn', 'telecel', 'airteltigo', 'unknown'],
     default: 'unknown'
   },
 

@@ -8,7 +8,7 @@ A USSD-based donation system built with Node.js and integrated with Hubtel APIs 
 - Predefined donation amounts: GHS 5, 10, 50, 100, 500, 1000
 - Custom amount option
 - Multiple frequencies: One-time, Weekly, Monthly, Quarterly, Annually
-- Mobile Money support: MTN, Vodafone, AirtelTigo
+- Mobile Money support: MTN, Telecel, AirtelTigo
 - Recurring payment subscriptions
 - MongoDB database for donor and transaction tracking
 
@@ -186,7 +186,7 @@ donation-ussd/
 | Network | Channel Code |
 |---------|--------------|
 | MTN Mobile Money | `mtn-gh` |
-| Vodafone Cash | `vodafone-gh` |
+| Telecel Cash | `vodafone-gh` |
 | AirtelTigo Money | `tigo-gh` |
 
 ## Deployment

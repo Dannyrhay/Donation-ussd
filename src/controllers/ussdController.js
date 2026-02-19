@@ -1,22 +1,6 @@
 const ussdMenuService = require('../services/ussdMenuService');
 const paymentService = require('../services/paymentService');
 
-/**
- * Handle incoming USSD requests from Hubtel
- *
- * Hubtel sends POST requests to this endpoint with the following format:
- * {
- *   "Type": "initiation" | "response",
- *   "Mobile": "233xxxxxxxxx",
- *   "SessionId": "unique-session-id",
- *   "ServiceCode": "xxx",
- *   "Message": "user input",
- *   "Operator": "mtn" | "vodafone" | "airtel" | "tigo",
- *   "Sequence": 1,
- *   "ClientState": "",
- *   "Platform": "USSD"
- * }
- */
 async function handleUssdRequest(req, res) {
   try {
     // Extract USSD request data
@@ -88,9 +72,9 @@ async function processPaymentAsync(donationData, operator) {
     // Map operator to Hubtel channel
     const channelMap = {
       'mtn': 'mtn-gh',
-      'vodafone': 'vodafone-gh',
-      'tigo': 'tigo-gh',
-      'airtel': 'tigo-gh'  // AirtelTigo uses tigo-gh
+      'telecel': 'vodafone-gh',    // Telecel (formerly Vodafone)
+      'vodafone': 'vodafone-gh',   // Legacy support
+      'airteltigo': 'tigo-gh'
     };
 
     const channel = channelMap[operator.toLowerCase()] || 'mtn-gh';
