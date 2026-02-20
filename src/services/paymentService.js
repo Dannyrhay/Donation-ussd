@@ -174,29 +174,59 @@ async function initiatePayment(paymentData) {
 
 /**
  * Handle payment callback from Hubtel
+ *
+ * Hubtel sends callbacks in various formats:
+ * - Status: "Success", "Successful", "Paid", "Failed", "Pending"
+ * - ResponseCode: "0000" for success
+ * - Data.Status or top-level Status
  */
 async function handlePaymentCallback(callbackData) {
   console.log('='.repeat(50));
-  console.log('Payment Callback Received:');
-  console.log(JSON.stringify(callbackData, null, 2));
+  console.log('HUBTEL PAYMENT CALLBACK RECEIVED:');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Raw Data:', JSON.stringify(callbackData, null, 2));
   console.log('='.repeat(50));
 
-  const reference = callbackData.ClientReference || callbackData.Data?.ClientReference;
-  const status = callbackData.Status || callbackData.Data?.Status;
+  // Extract reference from multiple possible locations
+  const reference = callbackData.ClientReference
+    || callbackData.Data?.ClientReference
+    || callbackData.data?.ClientReference;
 
   if (!reference) {
-    console.error('No reference in callback data');
+    console.error('ERROR: No reference found in callback data');
+    console.error('Available keys:', Object.keys(callbackData));
     return null;
   }
 
+  // Determine if payment was successful
+  // Hubtel uses various indicators for success
+  const responseCode = callbackData.ResponseCode || callbackData.Data?.ResponseCode;
+  const statusValue = callbackData.Status || callbackData.Data?.Status || callbackData.data?.Status;
+
+  // Success indicators
+  const isSuccess =
+    responseCode === '0000' ||
+    statusValue === 'Success' ||
+    statusValue === 'Successful' ||
+    statusValue === 'Paid' ||
+    statusValue === 'completed';
+
+  const finalStatus = isSuccess ? 'Success' : (statusValue || 'Failed');
+
+  console.log(`Reference: ${reference}`);
+  console.log(`ResponseCode: ${responseCode}`);
+  console.log(`Status Value: ${statusValue}`);
+  console.log(`Final Status: ${finalStatus} (${isSuccess ? 'SUCCESS' : 'FAILED'})`);
+
   // Update donation in database
-  const result = await donationService.updateDonationStatus(reference, status, callbackData);
+  const result = await donationService.updateDonationStatus(reference, finalStatus, callbackData);
 
   if (result.success) {
     console.log(`Payment ${reference} updated to: ${result.donation.status}`);
     return result.donation;
   }
 
+  console.error(`Failed to update donation ${reference}`);
   return null;
 }
 

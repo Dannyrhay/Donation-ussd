@@ -15,5 +15,7 @@ services:
         sync: false
       - key: MONGODB_URI
         sync: false
+      - key: CALLBACK_URL
+        sync: false
       - key: ORG_NAME
         value: Jesus Mission Fund
