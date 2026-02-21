@@ -31,23 +31,30 @@ async function handleUssdRequest(req, res) {
     console.log('USSD Response:');
     console.log(`  Type: ${response.Type}`);
     console.log(`  Message: ${response.Message.substring(0, 100)}...`);
+    if (response.Item) {
+      console.log(`  Item: ${JSON.stringify(response.Item)}`);
+    }
     console.log('='.repeat(50));
 
-    // If donation was confirmed, trigger payment
-    if (response.donationData) {
-      // Process payment asynchronously (don't wait for it)
-      processPaymentAsync(response.donationData, ussdRequest.Operator);
-    }
-
-    // Send response back to Hubtel
-    res.json({
+    // Build the response object for Hubtel
+    const hubtelResponse = {
       SessionId: response.SessionId,
       Type: response.Type,
       Message: response.Message,
       ClientState: response.ClientState || '',
-      DataType: 'input',
-      FieldType: 'text'
-    });
+      Label: response.Label || '',
+      DataType: response.DataType || 'input',
+      FieldType: response.FieldType || 'text'
+    };
+
+    // Include Item for AddToCart responses (triggers payment prompt)
+    if (response.Item) {
+      hubtelResponse.Item = response.Item;
+      console.log('AddToCart payment initiated - Hubtel will handle the payment prompt');
+    }
+
+    // Send response back to Hubtel
+    res.json(hubtelResponse);
 
   } catch (error) {
     console.error('USSD Error:', error);

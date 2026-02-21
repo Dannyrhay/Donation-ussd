@@ -1,0 +1,27 @@
+
+> donation-ussd@1.0.0 test
+> jest --verbose
+
+  console.log
+    [dotenv@17.3.1] injecting env (10) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+PASS tests/ussdMenuService.test.js
+  USSD Menu Service
+    processRequest
+      √ should return Response type for initial request (2 ms)
+      √ should return Response type for amount selection
+      √ should return Response type for frequency selection
+    AddToCart Payment Flow
+      √ should return AddToCart type when user confirms donation (1 ms)
+      √ should include correct Item structure in AddToCart response
+      √ should return Release type when user cancels
+    ResponseType
+      √ should have correct response types defined
+
+Test Suites: 1 passed, 1 total
+Tests:       7 passed, 7 total
+Snapshots:   0 total
+Time:        0.447 s, estimated 1 s
+Ran all test suites.

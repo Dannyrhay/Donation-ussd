@@ -18,9 +18,58 @@ const sessions = new Map();
  * Response types for Hubtel USSD
  */
 const ResponseType = {
-  RESPONSE: 'response',  // Continue session, expect user input
-  RELEASE: 'release'     // End session
+  RESPONSE: 'Response',      // Continue session, expect user input
+  RELEASE: 'Release',        // End session
+  ADDTOCART: 'AddToCart'     // Trigger payment prompt
 };
+
+/**
+ * Build a standardized USSD response with all required Hubtel fields
+ */
+function buildResponse(sessionId, type, message, options = {}) {
+  const response = {
+    SessionId: sessionId,
+    Type: type,
+    Message: message,
+    Label: options.label || message.split('\n')[0].substring(0, 50),
+    DataType: options.dataType || 'input',
+    FieldType: options.fieldType || 'text',
+    ClientState: options.clientState || ''
+  };
+
+  // Include donation data if present (for internal tracking)
+  if (options.donationData) {
+    response.donationData = options.donationData;
+  }
+
+  // Include Item for AddToCart responses
+  if (options.item) {
+    response.Item = options.item;
+  }
+
+  return response;
+}
+
+/**
+ * Build AddToCart response for payment
+ * This triggers the mobile money payment prompt
+ */
+function buildAddToCartResponse(sessionId, amount, description, clientReference) {
+  return {
+    SessionId: sessionId,
+    Type: ResponseType.ADDTOCART,
+    Message: `Processing payment of GHS ${amount}...`,
+    Label: 'Payment',
+    DataType: 'display',
+    FieldType: 'text',
+    ClientState: clientReference,
+    Item: {
+      ItemName: description,
+      Qty: 1,
+      Price: amount
+    }
+  };
+}
 
 /**
  * Build the welcome/amount selection menu
@@ -109,23 +158,24 @@ function processRequest(ussdRequest) {
   console.log(`Processing: SessionId=${SessionId}, Step=${session.step}, Input=${Message}`);
 
   // Initial request (user just dialed the code)
-  if (Type === 'initiation' || Sequence === 1) {
+  // Hubtel sends Type as "Initiation" (capital I)
+  if (Type === 'Initiation' || Type === 'initiation' || Sequence === 1) {
     updateSession(SessionId, { step: 'amount_selection' });
-    return {
-      SessionId,
-      Type: ResponseType.RESPONSE,
-      Message: buildAmountMenu(),
-      ClientState: 'amount_selection'
-    };
+    return buildResponse(SessionId, ResponseType.RESPONSE, buildAmountMenu(), {
+      label: 'Select Amount',
+      clientState: 'amount_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
   }
 
   // Process based on current step
   switch (session.step) {
     case 'amount_selection':
-      return handleAmountSelection(SessionId, Message, session);
+      return handleAmountSelection(SessionId, Message);
 
     case 'custom_amount':
-      return handleCustomAmount(SessionId, Message, session);
+      return handleCustomAmount(SessionId, Message);
 
     case 'frequency_selection':
       return handleFrequencySelection(SessionId, Message, session);
@@ -135,19 +185,18 @@ function processRequest(ussdRequest) {
 
     default:
       clearSession(SessionId);
-      return {
-        SessionId,
-        Type: ResponseType.RELEASE,
-        Message: 'Session error. Please try again.',
-        ClientState: 'error'
-      };
+      return buildResponse(SessionId, ResponseType.RELEASE, 'Session error. Please try again.', {
+        label: 'Error',
+        clientState: 'error',
+        dataType: 'display'
+      });
   }
 }
 
 /**
  * Handle amount selection step
  */
-function handleAmountSelection(sessionId, input, session) {
+function handleAmountSelection(sessionId, input) {
   const choice = parseInt(input);
   const amounts = config.donationAmounts;
 
@@ -159,68 +208,69 @@ function handleAmountSelection(sessionId, input, session) {
       amount: amount
     });
 
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: buildFrequencyMenu(amount),
-      ClientState: 'frequency_selection'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE, buildFrequencyMenu(amount), {
+      label: 'Select Frequency',
+      clientState: 'frequency_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
   }
 
   // Custom amount option
   if (choice === amounts.length + 1) {
     updateSession(sessionId, { step: 'custom_amount' });
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: 'Enter custom amount (GHS):',
-      ClientState: 'custom_amount'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE, 'Enter custom amount (GHS):', {
+      label: 'Custom Amount',
+      clientState: 'custom_amount',
+      dataType: 'input',
+      fieldType: 'decimal'
+    });
   }
 
   // Invalid input
-  return {
-    SessionId: sessionId,
-    Type: ResponseType.RESPONSE,
-    Message: `Invalid choice. Please select 1-${amounts.length + 1}\n\n` + buildAmountMenu(),
-    ClientState: 'amount_selection'
-  };
+  return buildResponse(sessionId, ResponseType.RESPONSE,
+    `Invalid choice. Please select 1-${amounts.length + 1}\n\n` + buildAmountMenu(), {
+      label: 'Invalid Selection',
+      clientState: 'amount_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
 }
 
 /**
  * Handle custom amount input
  */
-function handleCustomAmount(sessionId, input, session) {
+function handleCustomAmount(sessionId, input) {
   const amount = parseFloat(input);
 
   // Validate amount
   if (isNaN(amount) || amount <= 0) {
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: 'Invalid amount. Please enter a valid number:',
-      ClientState: 'custom_amount'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE, 'Invalid amount. Please enter a valid number:', {
+      label: 'Invalid Amount',
+      clientState: 'custom_amount',
+      dataType: 'input',
+      fieldType: 'decimal'
+    });
   }
 
   // Minimum amount check
   if (amount < 1) {
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: 'Minimum donation is GHS 1. Please enter amount:',
-      ClientState: 'custom_amount'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE, 'Minimum donation is GHS 1. Please enter amount:', {
+      label: 'Amount Too Low',
+      clientState: 'custom_amount',
+      dataType: 'input',
+      fieldType: 'decimal'
+    });
   }
 
-  // Maximum amount check (optional - adjust as needed)
+  // Maximum amount check
   if (amount > 10000) {
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: 'Maximum donation is GHS 10,000. Please enter amount:',
-      ClientState: 'custom_amount'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE, 'Maximum donation is GHS 10,000. Please enter amount:', {
+      label: 'Amount Too High',
+      clientState: 'custom_amount',
+      dataType: 'input',
+      fieldType: 'decimal'
+    });
   }
 
   updateSession(sessionId, {
@@ -228,12 +278,12 @@ function handleCustomAmount(sessionId, input, session) {
     amount: amount
   });
 
-  return {
-    SessionId: sessionId,
-    Type: ResponseType.RESPONSE,
-    Message: buildFrequencyMenu(amount),
-    ClientState: 'frequency_selection'
-  };
+  return buildResponse(sessionId, ResponseType.RESPONSE, buildFrequencyMenu(amount), {
+    label: 'Select Frequency',
+    clientState: 'frequency_selection',
+    dataType: 'input',
+    fieldType: 'number'
+  });
 }
 
 /**
@@ -244,12 +294,13 @@ function handleFrequencySelection(sessionId, input, session) {
   const frequencies = config.frequencies;
 
   if (!frequencies[choice]) {
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RESPONSE,
-      Message: 'Invalid choice. Please select 1-5:\n\n' + buildFrequencyMenu(session.amount),
-      ClientState: 'frequency_selection'
-    };
+    return buildResponse(sessionId, ResponseType.RESPONSE,
+      'Invalid choice. Please select 1-5:\n\n' + buildFrequencyMenu(session.amount), {
+        label: 'Invalid Frequency',
+        clientState: 'frequency_selection',
+        dataType: 'input',
+        fieldType: 'number'
+      });
   }
 
   const frequency = frequencies[choice];
@@ -259,12 +310,12 @@ function handleFrequencySelection(sessionId, input, session) {
     frequencyCode: frequency.code
   });
 
-  return {
-    SessionId: sessionId,
-    Type: ResponseType.RESPONSE,
-    Message: buildConfirmationMenu(session.amount, frequency.name),
-    ClientState: 'confirmation'
-  };
+  return buildResponse(sessionId, ResponseType.RESPONSE, buildConfirmationMenu(session.amount, frequency.name), {
+    label: 'Confirm Donation',
+    clientState: 'confirmation',
+    dataType: 'input',
+    fieldType: 'number'
+  });
 }
 
 /**
@@ -274,7 +325,7 @@ function handleConfirmation(sessionId, input, session, mobile) {
   const choice = input.trim();
 
   if (choice === '1') {
-    // User confirmed - process payment
+    // User confirmed - trigger payment via AddToCart
     const donationData = {
       sessionId,
       mobile,
@@ -285,49 +336,42 @@ function handleConfirmation(sessionId, input, session, mobile) {
 
     console.log('Donation confirmed:', donationData);
 
-    // Clear session
-    clearSession(sessionId);
+    // Generate a unique reference for tracking
+    const clientReference = `DON-${sessionId.substring(0, 8)}-${Date.now()}`;
 
-    // For now, return success message
-    // Later we'll integrate actual payment
-    if (session.frequencyCode === 'once') {
-      return {
-        SessionId: sessionId,
-        Type: ResponseType.RELEASE,
-        Message: `Thank you for your donation of GHS ${session.amount} to ${config.orgName}!\n\nA payment prompt will be sent to your phone shortly. Please approve to complete.`,
-        ClientState: 'completed',
-        // Include donation data for processing
-        donationData
-      };
-    } else {
-      return {
-        SessionId: sessionId,
-        Type: ResponseType.RELEASE,
-        Message: `Thank you for pledging GHS ${session.amount} ${session.frequency} to ${config.orgName}!\n\nA payment prompt will be sent to your phone. Your donation will recur ${session.frequency.toLowerCase()}.`,
-        ClientState: 'completed',
-        donationData
-      };
-    }
+    // Build description based on frequency
+    const description = session.frequencyCode === 'once'
+      ? `Donation to ${config.orgName}`
+      : `${session.frequency} donation to ${config.orgName}`;
+
+    // Update session with payment info (for callback handling)
+    updateSession(sessionId, {
+      step: 'payment_pending',
+      clientReference,
+      paymentInitiated: new Date()
+    });
+
+    // Return AddToCart response to trigger payment prompt
+    return buildAddToCartResponse(sessionId, session.amount, description, clientReference);
   }
 
   if (choice === '2') {
     // User cancelled
     clearSession(sessionId);
-    return {
-      SessionId: sessionId,
-      Type: ResponseType.RELEASE,
-      Message: 'Donation cancelled. Thank you for considering us. Dial again anytime!',
-      ClientState: 'cancelled'
-    };
+    return buildResponse(sessionId, ResponseType.RELEASE, 'Donation cancelled. Thank you for considering us. Dial again anytime!', {
+      label: 'Cancelled',
+      clientState: 'cancelled',
+      dataType: 'display'
+    });
   }
 
   // Invalid input
-  return {
-    SessionId: sessionId,
-    Type: ResponseType.RESPONSE,
-    Message: 'Invalid choice. Please select:\n1. Confirm\n2. Cancel',
-    ClientState: 'confirmation'
-  };
+  return buildResponse(sessionId, ResponseType.RESPONSE, 'Invalid choice. Please select:\n1. Confirm\n2. Cancel', {
+    label: 'Invalid Choice',
+    clientState: 'confirmation',
+    dataType: 'input',
+    fieldType: 'number'
+  });
 }
 
 module.exports = {
