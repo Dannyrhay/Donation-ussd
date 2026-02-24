@@ -14,6 +14,9 @@ const config = require('../config');
 // In-memory session storage (use Redis/DB in production)
 const sessions = new Map();
 
+// Session timeout in milliseconds (3 minutes for USSD)
+const SESSION_TIMEOUT_MS = 3 * 60 * 1000;
+
 /**
  * Response types for Hubtel USSD
  */
@@ -93,11 +96,11 @@ function buildAmountMenu() {
 function buildFrequencyMenu(amount) {
   let menu = `Amount: GHS ${amount}\n`;
   menu += 'Select frequency:\n';
-  menu += '1. One-time\n';
-  menu += '2. Weekly\n';
-  menu += '3. Monthly\n';
-  menu += '4. Quarterly\n';
-  menu += '5. Annually';
+  menu += '1. Weekly\n';
+  menu += '2. Monthly\n';
+  menu += '3. Annually\n';
+  menu += '4. One-time\n';
+  menu += '0. Back';
 
   return menu;
 }
@@ -110,7 +113,8 @@ function buildConfirmationMenu(amount, frequency) {
   menu += `Amount: GHS ${amount}\n`;
   menu += `Frequency: ${frequency}\n\n`;
   menu += '1. Confirm\n';
-  menu += '2. Cancel';
+  menu += '2. Cancel\n';
+  menu += '0. Back';
 
   return menu;
 }
@@ -147,6 +151,30 @@ function clearSession(sessionId) {
 }
 
 /**
+ * Check if session has expired
+ */
+function isSessionExpired(session) {
+  if (!session || !session.createdAt) return true;
+  const age = Date.now() - new Date(session.createdAt).getTime();
+  return age > SESSION_TIMEOUT_MS;
+}
+
+/**
+ * Clean up expired sessions (called periodically)
+ */
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  for (const [sessionId, session] of sessions.entries()) {
+    if (isSessionExpired(session)) {
+      sessions.delete(sessionId);
+    }
+  }
+}
+
+// Run cleanup every 5 minutes
+setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+
+/**
  * Process USSD request and return appropriate response
  */
 function processRequest(ussdRequest) {
@@ -160,13 +188,24 @@ function processRequest(ussdRequest) {
   // Initial request (user just dialed the code)
   // Hubtel sends Type as "Initiation" (capital I)
   if (Type === 'Initiation' || Type === 'initiation' || Sequence === 1) {
-    updateSession(SessionId, { step: 'amount_selection' });
+    updateSession(SessionId, { step: 'amount_selection', createdAt: new Date() });
     return buildResponse(SessionId, ResponseType.RESPONSE, buildAmountMenu(), {
       label: 'Select Amount',
       clientState: 'amount_selection',
       dataType: 'input',
       fieldType: 'number'
     });
+  }
+
+  // Check for session timeout
+  if (isSessionExpired(session)) {
+    clearSession(SessionId);
+    return buildResponse(SessionId, ResponseType.RELEASE,
+      'Session timed out. Please dial again to continue.', {
+        label: 'Session Expired',
+        clientState: 'timeout',
+        dataType: 'display'
+      });
   }
 
   // Process based on current step
@@ -241,11 +280,22 @@ function handleAmountSelection(sessionId, input) {
  * Handle custom amount input
  */
 function handleCustomAmount(sessionId, input) {
+  // Handle back option
+  if (input.trim() === '0') {
+    updateSession(sessionId, { step: 'amount_selection' });
+    return buildResponse(sessionId, ResponseType.RESPONSE, buildAmountMenu(), {
+      label: 'Select Amount',
+      clientState: 'amount_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
+  }
+
   const amount = parseFloat(input);
 
   // Validate amount
   if (isNaN(amount) || amount <= 0) {
-    return buildResponse(sessionId, ResponseType.RESPONSE, 'Invalid amount. Please enter a valid number:', {
+    return buildResponse(sessionId, ResponseType.RESPONSE, 'Invalid amount. Enter amount or 0 to go back:', {
       label: 'Invalid Amount',
       clientState: 'custom_amount',
       dataType: 'input',
@@ -293,9 +343,20 @@ function handleFrequencySelection(sessionId, input, session) {
   const choice = input.trim();
   const frequencies = config.frequencies;
 
+  // Handle back option - go to amount selection
+  if (choice === '0') {
+    updateSession(sessionId, { step: 'amount_selection', amount: null });
+    return buildResponse(sessionId, ResponseType.RESPONSE, buildAmountMenu(), {
+      label: 'Select Amount',
+      clientState: 'amount_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
+  }
+
   if (!frequencies[choice]) {
     return buildResponse(sessionId, ResponseType.RESPONSE,
-      'Invalid choice. Please select 1-5:\n\n' + buildFrequencyMenu(session.amount), {
+      'Invalid choice. Select 1-4 or 0 to go back:\n\n' + buildFrequencyMenu(session.amount), {
         label: 'Invalid Frequency',
         clientState: 'frequency_selection',
         dataType: 'input',
@@ -323,6 +384,17 @@ function handleFrequencySelection(sessionId, input, session) {
  */
 function handleConfirmation(sessionId, input, session, mobile) {
   const choice = input.trim();
+
+  // Handle back option - go to frequency selection
+  if (choice === '0') {
+    updateSession(sessionId, { step: 'frequency_selection', frequency: null, frequencyCode: null });
+    return buildResponse(sessionId, ResponseType.RESPONSE, buildFrequencyMenu(session.amount), {
+      label: 'Select Frequency',
+      clientState: 'frequency_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
+  }
 
   if (choice === '1') {
     // User confirmed - trigger payment via AddToCart

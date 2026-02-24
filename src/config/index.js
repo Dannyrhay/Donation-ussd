@@ -20,14 +20,13 @@ module.exports = {
   orgName: process.env.ORG_NAME || 'Jesus Mission Fund',
 
   // Donation amounts in GHS
-  donationAmounts: [5, 10, 50, 100, 500, 1000],
+  donationAmounts: [5, 10, 50, 100, 500],
 
   // Donation frequencies
   frequencies: {
-    '1': { name: 'One-time', code: 'once' },
-    '2': { name: 'Weekly', code: 'weekly' },
-    '3': { name: 'Monthly', code: 'monthly' },
-    '4': { name: 'Quarterly', code: 'quarterly' },
-    '5': { name: 'Annually', code: 'annually' }
+    '1': { name: 'Weekly', code: 'weekly' },
+    '2': { name: 'Monthly', code: 'monthly' },
+    '3': { name: 'Annually', code: 'annually' },
+    '4': { name: 'One-time', code: 'once' }
   }
 };
