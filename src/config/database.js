@@ -7,10 +7,21 @@ const mongoose = require('mongoose');
  */
 
 async function connectDatabase() {
-  const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/donation_ussd';
+  const mongoUri = process.env.MONGODB_URI;
+
+  // Skip connection if no URI provided
+  if (!mongoUri) {
+    console.log('='.repeat(50));
+    console.log('MONGODB_URI not set - running without database');
+    console.log('='.repeat(50));
+    return null;
+  }
 
   try {
-    await mongoose.connect(mongoUri);
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 10000, // 10 second timeout
+      connectTimeoutMS: 10000
+    });
 
     console.log('='.repeat(50));
     console.log('MongoDB Connected Successfully');
