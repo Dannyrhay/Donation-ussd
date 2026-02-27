@@ -1,4 +1,6 @@
 const config = require('../config');
+const recurringInvoiceService = require('./recurringInvoiceService');
+const donationService = require('./donationService');
 
 /**
  * USSD Menu Service
@@ -9,6 +11,8 @@ const config = require('../config');
  * 2. Select Amount -> Select Frequency
  * 3. Select Frequency -> Confirm
  * 4. Confirm -> Process Payment
+ *    - One-time: AddToCart (standard payment)
+ *    - Recurring: Hubtel Recurring Invoice API
  */
 
 // In-memory session storage (use Redis/DB in production)
@@ -23,8 +27,15 @@ const SESSION_TIMEOUT_MS = 3 * 60 * 1000;
 const ResponseType = {
   RESPONSE: 'Response',      // Continue session, expect user input
   RELEASE: 'Release',        // End session
-  ADDTOCART: 'AddToCart'     // Trigger payment prompt
+  ADDTOCART: 'AddToCart'     // Trigger payment prompt (for one-time payments)
 };
+
+/**
+ * Check if frequency is recurring (not one-time)
+ */
+function isRecurringFrequency(frequencyCode) {
+  return frequencyCode && frequencyCode !== 'once';
+}
 
 /**
  * Build a standardized USSD response with all required Hubtel fields
@@ -177,7 +188,7 @@ setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
 /**
  * Process USSD request and return appropriate response
  */
-function processRequest(ussdRequest) {
+async function processRequest(ussdRequest) {
   const { SessionId, Type, Message, Mobile, Sequence } = ussdRequest;
 
   // Get current session
@@ -220,7 +231,7 @@ function processRequest(ussdRequest) {
       return handleFrequencySelection(SessionId, Message, session);
 
     case 'confirmation':
-      return handleConfirmation(SessionId, Message, session, Mobile);
+      return await handleConfirmation(SessionId, Message, session, Mobile);
 
     default:
       clearSession(SessionId);
@@ -382,7 +393,7 @@ function handleFrequencySelection(sessionId, input, session) {
 /**
  * Handle confirmation step
  */
-function handleConfirmation(sessionId, input, session, mobile) {
+async function handleConfirmation(sessionId, input, session, mobile) {
   const choice = input.trim();
 
   // Handle back option - go to frequency selection
@@ -397,7 +408,7 @@ function handleConfirmation(sessionId, input, session, mobile) {
   }
 
   if (choice === '1') {
-    // User confirmed - trigger payment via AddToCart
+    // User confirmed
     const donationData = {
       sessionId,
       mobile,
@@ -416,7 +427,84 @@ function handleConfirmation(sessionId, input, session, mobile) {
       ? `Donation to ${config.orgName}`
       : `${session.frequency} donation to ${config.orgName}`;
 
-    // Update session with payment info (for callback handling)
+    // Check if this is a recurring donation
+    if (isRecurringFrequency(session.frequencyCode)) {
+      // Use Hubtel Recurring Invoice API for subscriptions
+      console.log('Creating recurring invoice for:', session.frequencyCode);
+
+      try {
+        const invoiceResult = await recurringInvoiceService.createRecurringInvoice({
+          phoneNumber: mobile,
+          amount: session.amount,
+          frequency: session.frequencyCode,
+          description,
+          clientReference
+        });
+
+        if (invoiceResult.success) {
+          // Create subscription record in database
+          const channel = recurringInvoiceService.detectNetwork(mobile);
+          const subscriptionResult = await donationService.createSubscription({
+            phoneNumber: recurringInvoiceService.formatPhoneNumber(mobile),
+            amount: session.amount,
+            channel,
+            frequency: session.frequencyCode,
+            sessionId,
+            recurringInvoiceId: invoiceResult.data?.recurringInvoiceId,
+            hubtelRequestId: invoiceResult.data?.requestId,
+            hubtelVerificationType: invoiceResult.data?.verificationType,
+            clientReference,
+            managedByHubtel: true
+          });
+
+          if (subscriptionResult.success) {
+            console.log(`Subscription created: ${subscriptionResult.subscription._id}`);
+          }
+
+          // Update session with recurring invoice info
+          updateSession(sessionId, {
+            step: 'recurring_created',
+            clientReference,
+            recurringInvoiceId: invoiceResult.data?.recurringInvoiceId,
+            paymentInitiated: new Date()
+          });
+
+          // Return success message - Hubtel will handle the payment prompt
+          clearSession(sessionId);
+          return buildResponse(sessionId, ResponseType.RELEASE,
+            `Your ${session.frequency.toLowerCase()} donation of GHS ${session.amount} has been set up!\n\nYou will receive a payment prompt shortly. Thank you for your support!`, {
+              label: 'Subscription Created',
+              clientState: clientReference,
+              dataType: 'display',
+              donationData: {
+                ...donationData,
+                clientReference,
+                recurringInvoiceId: invoiceResult.data?.recurringInvoiceId,
+                isRecurring: true
+              }
+            });
+        } else {
+          // Failed to create recurring invoice
+          console.error('Recurring invoice failed:', invoiceResult.error);
+          return buildResponse(sessionId, ResponseType.RELEASE,
+            'Sorry, we could not set up your recurring donation. Please try again later.', {
+              label: 'Setup Failed',
+              clientState: 'error',
+              dataType: 'display'
+            });
+        }
+      } catch (error) {
+        console.error('Recurring invoice error:', error);
+        return buildResponse(sessionId, ResponseType.RELEASE,
+          'An error occurred. Please try again later.', {
+            label: 'Error',
+            clientState: 'error',
+            dataType: 'display'
+          });
+      }
+    }
+
+    // One-time donation - use AddToCart
     updateSession(sessionId, {
       step: 'payment_pending',
       clientReference,

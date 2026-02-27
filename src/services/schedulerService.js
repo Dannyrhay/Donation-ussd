@@ -6,7 +6,13 @@ const config = require('../config');
  * Scheduler Service
  *
  * Manages scheduled tasks for the donation system.
- * Primary task: Process recurring subscription payments.
+ *
+ * NOTE: With Hubtel Recurring Invoice API integration, Hubtel now handles
+ * the scheduling and automatic debit processing for recurring subscriptions.
+ * This scheduler is kept for:
+ * 1. Processing legacy subscriptions not managed by Hubtel (managedByHubtel: false)
+ * 2. Cleanup of expired subscriptions
+ * 3. Generating reports and statistics
  *
  * Security measures:
  * - Configurable schedule via environment variables

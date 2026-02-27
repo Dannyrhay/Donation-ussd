@@ -9,6 +9,15 @@ const { v4: uuidv4 } = require('uuid');
  * Handles automated processing of recurring subscription payments
  * with retry logic, failure handling, and comprehensive logging.
  *
+ * NOTE: With Hubtel Recurring Invoice API integration, most subscriptions
+ * are now managed by Hubtel (managedByHubtel: true). This processor only
+ * handles legacy subscriptions that are not managed by Hubtel.
+ *
+ * For Hubtel-managed subscriptions:
+ * - Hubtel handles scheduling and automatic debits
+ * - We receive callbacks at /api/callback/recurring
+ * - The Subscription model tracks the recurringInvoiceId
+ *
  * Security measures:
  * - Rate limiting on processing
  * - Transaction locking to prevent duplicate charges

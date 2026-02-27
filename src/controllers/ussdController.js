@@ -26,7 +26,7 @@ async function handleUssdRequest(req, res) {
     console.log('='.repeat(50));
 
     // Process the USSD request through our menu service
-    const response = ussdMenuService.processRequest(ussdRequest);
+    const response = await ussdMenuService.processRequest(ussdRequest);
 
     console.log('USSD Response:');
     console.log(`  Type: ${response.Type}`);

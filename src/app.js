@@ -121,6 +121,7 @@ app.get('/', (req, res) => {
     endpoints: {
       ussd: '/api/ussd',
       callback: '/api/callback/payment',
+      recurringCallback: '/api/callback/recurring',
       stats: '/api/callback/stats',
       donations: '/api/callback/payments',
       subscriptions: '/api/callback/subscriptions',
@@ -190,6 +191,7 @@ async function startServer() {
     console.log('Endpoints:');
     console.log(`  USSD:          http://localhost:${config.port}/api/ussd`);
     console.log(`  Callback:      http://localhost:${config.port}/api/callback/payment`);
+    console.log(`  Recurring:     http://localhost:${config.port}/api/callback/recurring`);
     console.log(`  Stats:         http://localhost:${config.port}/api/callback/stats`);
     console.log(`  Admin:         http://localhost:${config.port}/api/admin`);
     console.log('');

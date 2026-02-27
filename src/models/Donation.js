@@ -28,17 +28,17 @@ const donationSchema = new mongoose.Schema({
     min: 1
   },
 
-  // Payment channel
+  // Payment channel (standard or recurring)
   channel: {
     type: String,
-    enum: ['mtn-gh', 'vodafone-gh', 'tigo-gh'],
+    enum: ['mtn-gh', 'vodafone-gh', 'tigo-gh', 'mtn_gh_rec', 'vodafone_gh_rec'],
     required: true
   },
 
   // Frequency type
   frequency: {
     type: String,
-    enum: ['once', 'weekly', 'monthly', 'quarterly', 'annually'],
+    enum: ['once', 'weekly', 'monthly', 'annually'],
     default: 'once'
   },
 
@@ -65,7 +65,7 @@ const donationSchema = new mongoose.Schema({
   // Payment status
   status: {
     type: String,
-    enum: ['pending', 'processing', 'completed', 'failed', 'cancelled', 'refunded'],
+    enum: ['pending', 'processing', 'completed', 'Success', 'failed', 'cancelled', 'refunded'],
     default: 'pending',
     index: true
   },
@@ -110,7 +110,7 @@ const donationSchema = new mongoose.Schema({
   // Source of donation
   source: {
     type: String,
-    enum: ['ussd', 'web', 'app'],
+    enum: ['ussd', 'web', 'app', 'subscription', 'hubtel_recurring'],
     default: 'ussd'
   }
 

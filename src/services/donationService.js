@@ -64,6 +64,7 @@ async function createDonation(data) {
 
 /**
  * Create a subscription for recurring donations
+ * Now integrates with Hubtel Recurring Invoice API
  */
 async function createSubscription(data) {
   const {
@@ -71,18 +72,36 @@ async function createSubscription(data) {
     amount,
     channel,
     frequency,
-    sessionId
+    sessionId,
+    recurringInvoiceId,
+    hubtelRequestId,
+    hubtelVerificationType,
+    clientReference,
+    managedByHubtel = true
   } = data;
 
   try {
     // Find or create donor
-    const donor = await Donor.findOrCreateByPhone(
-      phoneNumber,
-      channel.split('-')[0]
-    );
+    const networkCode = channel.includes('_rec')
+      ? channel.replace('_gh_rec', '')
+      : channel.split('-')[0];
+    const donor = await Donor.findOrCreateByPhone(phoneNumber, networkCode);
 
-    // Calculate first payment date (now)
+    // Calculate first payment date and end date
     const nextPaymentDate = new Date();
+    let invoiceEndDate = new Date();
+
+    switch (frequency) {
+      case 'weekly':
+        invoiceEndDate.setFullYear(invoiceEndDate.getFullYear() + 1);
+        break;
+      case 'monthly':
+        invoiceEndDate.setFullYear(invoiceEndDate.getFullYear() + 2);
+        break;
+      case 'annually':
+        invoiceEndDate.setFullYear(invoiceEndDate.getFullYear() + 10);
+        break;
+    }
 
     // Create subscription
     const subscription = await Subscription.create({
@@ -91,12 +110,22 @@ async function createSubscription(data) {
       amount,
       channel,
       frequency,
+      status: recurringInvoiceId ? 'active' : 'pending',
+      recurringInvoiceId,
+      hubtelRequestId,
+      hubtelVerificationType,
+      clientReference,
       nextPaymentDate,
+      invoiceEndDate,
       originalSessionId: sessionId,
-      source: 'ussd'
+      source: 'ussd',
+      managedByHubtel
     });
 
     console.log(`Subscription created: ${subscription._id} - GHS ${amount} ${frequency} from ${phoneNumber}`);
+    if (recurringInvoiceId) {
+      console.log(`Hubtel Invoice ID: ${recurringInvoiceId}`);
+    }
 
     return {
       success: true,
@@ -170,6 +199,7 @@ async function getActiveSubscriptions(phoneNumber) {
 
 /**
  * Cancel a subscription
+ * Also cancels the Hubtel recurring invoice if applicable
  */
 async function cancelSubscription(subscriptionId, reason) {
   try {
@@ -177,6 +207,17 @@ async function cancelSubscription(subscriptionId, reason) {
 
     if (!subscription) {
       return { success: false, error: 'Subscription not found' };
+    }
+
+    // If managed by Hubtel and has invoice ID, cancel on Hubtel
+    if (subscription.managedByHubtel && subscription.recurringInvoiceId) {
+      const recurringService = require('./recurringInvoiceService');
+      const hubtelResult = await recurringService.cancelRecurringInvoice(subscription.recurringInvoiceId);
+
+      if (!hubtelResult.success && !hubtelResult.simulated) {
+        console.warn('Failed to cancel Hubtel invoice:', hubtelResult.error);
+        // Continue with local cancellation even if Hubtel fails
+      }
     }
 
     await subscription.cancel(reason);

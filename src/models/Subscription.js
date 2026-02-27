@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 /**
  * Subscription Model
  *
- * Manages recurring donation subscriptions
+ * Manages recurring donation subscriptions using Hubtel Recurring Invoice API.
+ * Hubtel handles the scheduling and automatic debit processing.
  */
 const subscriptionSchema = new mongoose.Schema({
   // Reference to donor
@@ -28,32 +29,53 @@ const subscriptionSchema = new mongoose.Schema({
     min: 1
   },
 
-  // Payment channel
+  // Payment channel (standard or recurring)
   channel: {
     type: String,
-    enum: ['mtn-gh', 'vodafone-gh', 'tigo-gh'],
+    enum: ['mtn-gh', 'vodafone-gh', 'tigo-gh', 'mtn_gh_rec', 'vodafone_gh_rec'],
     required: true
   },
 
   // Frequency of payment
   frequency: {
     type: String,
-    enum: ['weekly', 'monthly', 'quarterly', 'annually'],
+    enum: ['weekly', 'monthly', 'annually'],
     required: true
   },
 
   // Subscription status
   status: {
     type: String,
-    enum: ['active', 'paused', 'cancelled', 'expired'],
-    default: 'active',
+    enum: ['pending', 'active', 'paused', 'cancelled', 'expired', 'failed'],
+    default: 'pending',
     index: true
   },
 
-  // Next payment date
+  // Hubtel Recurring Invoice ID (from Hubtel API)
+  recurringInvoiceId: {
+    type: String,
+    index: true,
+    sparse: true
+  },
+
+  // Hubtel Request ID (for verification if needed)
+  hubtelRequestId: {
+    type: String
+  },
+
+  // Hubtel verification type (USSD or OTP)
+  hubtelVerificationType: {
+    type: String
+  },
+
+  // Last Hubtel response code
+  hubtelResponseCode: {
+    type: String
+  },
+
+  // Next payment date (tracked for display, Hubtel manages actual scheduling)
   nextPaymentDate: {
     type: Date,
-    required: true,
     index: true
   },
 
@@ -80,16 +102,9 @@ const subscriptionSchema = new mongoose.Schema({
     default: 0
   },
 
-  // Maximum number of payments (null = unlimited)
-  maxPayments: {
-    type: Number,
-    default: null
-  },
-
-  // End date for subscription (null = no end date)
-  endDate: {
-    type: Date,
-    default: null
+  // Invoice end date (sent to Hubtel)
+  invoiceEndDate: {
+    type: Date
   },
 
   // Why was it cancelled/paused?
@@ -102,11 +117,23 @@ const subscriptionSchema = new mongoose.Schema({
     type: String
   },
 
+  // Client reference for tracking
+  clientReference: {
+    type: String,
+    index: true
+  },
+
   // Created via
   source: {
     type: String,
     enum: ['ussd', 'web', 'app'],
     default: 'ussd'
+  },
+
+  // Whether this is managed by Hubtel Recurring API
+  managedByHubtel: {
+    type: Boolean,
+    default: true
   }
 
 }, {
@@ -125,9 +152,6 @@ subscriptionSchema.methods.calculateNextPaymentDate = function(fromDate = new Da
       break;
     case 'monthly':
       date.setMonth(date.getMonth() + 1);
-      break;
-    case 'quarterly':
-      date.setMonth(date.getMonth() + 3);
       break;
     case 'annually':
       date.setFullYear(date.getFullYear() + 1);
@@ -216,12 +240,54 @@ subscriptionSchema.methods.resume = async function() {
 };
 
 /**
- * Find subscriptions due for payment
+ * Activate subscription after Hubtel confirms
+ */
+subscriptionSchema.methods.activate = async function(hubtelData = {}) {
+  this.status = 'active';
+  this.statusReason = null;
+  if (hubtelData.recurringInvoiceId) {
+    this.recurringInvoiceId = hubtelData.recurringInvoiceId;
+  }
+  if (hubtelData.responseCode) {
+    this.hubtelResponseCode = hubtelData.responseCode;
+  }
+  this.nextPaymentDate = this.calculateNextPaymentDate();
+  await this.save();
+  return this;
+};
+
+/**
+ * Mark subscription as failed
+ */
+subscriptionSchema.methods.markFailed = async function(reason) {
+  this.status = 'failed';
+  this.statusReason = reason;
+  await this.save();
+  return this;
+};
+
+/**
+ * Find subscription by Hubtel recurring invoice ID
+ */
+subscriptionSchema.statics.findByRecurringInvoiceId = function(recurringInvoiceId) {
+  return this.findOne({ recurringInvoiceId });
+};
+
+/**
+ * Find subscription by client reference
+ */
+subscriptionSchema.statics.findByClientReference = function(clientReference) {
+  return this.findOne({ clientReference });
+};
+
+/**
+ * Find subscriptions due for payment (for non-Hubtel managed subscriptions)
  */
 subscriptionSchema.statics.findDueForPayment = function() {
   const now = new Date();
   return this.find({
     status: 'active',
+    managedByHubtel: false,
     nextPaymentDate: { $lte: now }
   }).populate('donor');
 };
@@ -251,10 +317,12 @@ subscriptionSchema.statics.getStats = async function() {
   ]);
 
   const result = {
+    pending: { count: 0, totalAmount: 0 },
     active: { count: 0, totalAmount: 0 },
     paused: { count: 0, totalAmount: 0 },
     cancelled: { count: 0, totalAmount: 0 },
-    expired: { count: 0, totalAmount: 0 }
+    expired: { count: 0, totalAmount: 0 },
+    failed: { count: 0, totalAmount: 0 }
   };
 
   stats.forEach(stat => {
