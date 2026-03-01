@@ -72,7 +72,7 @@ function buildAddToCartResponse(sessionId, amount, description, clientReference)
   return {
     SessionId: sessionId,
     Type: ResponseType.ADDTOCART,
-    Message: `Processing payment of GHS ${amount}...`,
+    Message: `Thank you for giving to the Lord. Your contribution to JMF is received. God bless you richly.`,
     Label: 'Payment',
     DataType: 'display',
     FieldType: 'text',
@@ -472,7 +472,7 @@ async function handleConfirmation(sessionId, input, session, mobile) {
           // Return success message - Hubtel will handle the payment prompt
           clearSession(sessionId);
           return buildResponse(sessionId, ResponseType.RELEASE,
-            `Your ${session.frequency.toLowerCase()} donation of GHS ${session.amount} has been set up!\n\nYou will receive a payment prompt shortly. Thank you for your support!`, {
+            `Thank you for giving to the Lord. Your contribution to JMF is received. God bless you richly.`, {
               label: 'Subscription Created',
               clientState: clientReference,
               dataType: 'display',
