@@ -162,7 +162,6 @@ async function createRecurringInvoice(invoiceData) {
     totalAmount: amount,
     initialAmount: amount,
     Currency: config.recurringDefaults.currency,
-    callbackUrl: `${config.recurringCallbackUrl}/recurring`
   };
 
   console.log('='.repeat(50));
