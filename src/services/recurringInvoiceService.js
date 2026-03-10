@@ -53,14 +53,15 @@ function detectNetwork(phoneNumber) {
   const vodafonePrefixes = ['20', '50'];
 
   if (mtnPrefixes.includes(prefix)) {
-    return 'mtn_gh_rec';
+    return 'mtn-gh';
   } else if (vodafonePrefixes.includes(prefix)) {
-    return 'vodafone_gh_rec';
+    return 'vodafone-gh';
   }
 
   // Default to MTN if unknown
-  return 'mtn_gh_rec';
+  return 'mtn-gh';
 }
+
 
 /**
  * Calculate invoice end date based on frequency
@@ -145,15 +146,22 @@ async function createRecurringInvoice(invoiceData) {
     };
   }
 
-  const orderDate = new Date().toISOString().replace('Z', '');
-  const invoiceEndDate = calculateEndDate(frequency);
+  // Hubtel expects MM/DD/YYYY HH:MM:SS
+  const formatHubtelDate = (date) => {
+    const d = new Date(date);
+    const pad = (n) => n.toString().padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  const orderDate = formatHubtelDate(new Date());
+  const invoiceEndDate = formatHubtelDate(calculateEndDate(frequency));
 
   const requestBody = {
-    orderDate,
-    invoiceEndDate,
+    orderDate: orderDate,
+    invoiceEndDate: invoiceEndDate,
     Description: description || `Recurring donation to ${config.orgName}`,
     startTime: config.recurringDefaults.startTime,
-    paymentInterval,
+    paymentInterval: paymentInterval,
     customerMobileNumber: formattedPhone,
     paymentOption: config.recurringDefaults.paymentOption,
     Channel: channel,
@@ -161,8 +169,11 @@ async function createRecurringInvoice(invoiceData) {
     recurringAmount: amount,
     totalAmount: amount,
     initialAmount: amount,
-    Currency: config.recurringDefaults.currency,
+    Currency: config.recurringDefaults.currency
   };
+
+
+
 
   console.log('='.repeat(50));
   console.log('CREATING HUBTEL RECURRING INVOICE');
@@ -185,8 +196,8 @@ async function createRecurringInvoice(invoiceData) {
     console.log('Response:', JSON.stringify(response.data, null, 2));
     console.log('='.repeat(50));
 
-    // Check response code
-    if (response.data.responseCode === '0001') {
+    // Check response code - 0001 is success/pending for mobile money, 0000 for cards/general
+    if (response.data.responseCode === '0001' || response.data.responseCode === '0000') {
       // Success - pending verification
       return {
         success: true,
@@ -201,12 +212,14 @@ async function createRecurringInvoice(invoiceData) {
         message: response.data.message || 'Invoice created successfully'
       };
     } else {
+      console.error(`RECURRING INVOICE FAILED: Code ${response.data.responseCode}, Message: ${response.data.message}`);
       return {
         success: false,
         error: response.data.message || 'Failed to create recurring invoice',
         responseCode: response.data.responseCode
       };
     }
+
 
   } catch (error) {
     console.error('Hubtel Recurring Invoice Error:', error.response?.data || error.message);
