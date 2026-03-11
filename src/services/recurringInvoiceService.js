@@ -175,23 +175,29 @@ async function createRecurringInvoice(invoiceData) {
 
 
 
+  const fullUrl = `${config.hubtelRecurring.baseUrl}/${config.hubtelRecurring.posSalesId}/create-invoice`;
+
   console.log('='.repeat(50));
   console.log('CREATING HUBTEL RECURRING INVOICE');
+  console.log('URL:', fullUrl);
+  console.log('Request Body:', JSON.stringify(requestBody, null, 2));
   console.log('='.repeat(50));
-  console.log('Request:', JSON.stringify(requestBody, null, 2));
+
 
   try {
     const response = await axios.post(
-      `${config.hubtelRecurring.baseUrl}/${config.hubtelRecurring.posSalesId}/create-invoice`,
+      fullUrl,
       requestBody,
       {
         headers: {
           'Authorization': getAuthHeader(),
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
+
 
     console.log('Response:', JSON.stringify(response.data, null, 2));
     console.log('='.repeat(50));

@@ -25,10 +25,11 @@ module.exports = {
     },
     // Interval mapping for Hubtel API
     intervals: {
-      'weekly': 'WEEKLY',
-      'monthly': 'MONTHLY',
-      'annually': 'YEARLY'
+      'weekly': 'Weekly',
+      'monthly': 'Monthly',
+      'annually': 'Yearly'
     }
+
   },
 
   // Callbacks
