@@ -153,24 +153,29 @@ async function createRecurringInvoice(invoiceData) {
     return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   };
 
-  const orderDate = formatHubtelDate(new Date());
+  // Hubtel requires OrderDate to be in the future. We'll set it to 10 minutes from now.
+  const futureDate = new Date();
+  futureDate.setMinutes(futureDate.getMinutes() + 2);
+  
+  const orderDate = formatHubtelDate(futureDate);
   const invoiceEndDate = formatHubtelDate(calculateEndDate(frequency));
 
   const requestBody = {
-    orderDate: orderDate,
-    invoiceEndDate: invoiceEndDate,
+    OrderDate: orderDate,
+    InvoiceEndDate: invoiceEndDate,
     Description: description || `Recurring donation to ${config.orgName}`,
-    startTime: config.recurringDefaults.startTime,
-    paymentInterval: paymentInterval,
-    customerMobileNumber: formattedPhone,
-    paymentOption: config.recurringDefaults.paymentOption,
+    StartTime: config.recurringDefaults.startTime,
+    PaymentInterval: paymentInterval,
+    CustomerMobileNumber: formattedPhone,
+    PaymentOption: config.recurringDefaults.paymentOption,
     Channel: channel,
-    customerName: customerName || 'Donor',
-    recurringAmount: amount,
-    totalAmount: amount,
-    initialAmount: amount,
+    CustomerName: customerName || 'Donor',
+    RecurringAmount: amount,
+    TotalAmount: amount,
+    InitialAmount: amount,
     Currency: config.recurringDefaults.currency
   };
+
 
 
 
