@@ -127,6 +127,12 @@ async function initiatePayment(paymentData) {
       ClientReference: reference
     };
 
+    // Only add FulfilmentCallbackUrl when configured — no fallback to avoid
+    // pointing Hubtel at the wrong endpoint
+    if (config.fulfilmentCallbackUrl) {
+      requestBody.FulfilmentCallbackUrl = config.fulfilmentCallbackUrl;
+    }
+
     console.log('Hubtel Payment Request:', JSON.stringify(requestBody, null, 2));
 
     const response = await axios.post(
@@ -266,9 +272,74 @@ async function getStats() {
   return donationService.getStats();
 }
 
+/**
+ * Handle service fulfilment callback from Hubtel
+ *
+ * Hubtel calls this URL after a successful payment to confirm service delivery.
+ * Must ALWAYS return { ResponseCode: "0000", Status: "TXN_SUCCESS", Message: "Fulfilled" }
+ * regardless of internal errors — returning anything else risks Hubtel reversing the transaction.
+ *
+ * @param {Object} callbackData - Callback payload from Hubtel
+ * @returns {Object} Hubtel fulfilment response
+ */
+async function handleFulfilmentCallback(callbackData) {
+  console.log('='.repeat(50));
+  console.log('HUBTEL FULFILMENT CALLBACK RECEIVED');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Raw Data:', JSON.stringify(callbackData, null, 2));
+  console.log('='.repeat(50));
+
+  const FULFILMENT_RESPONSE = {
+    ResponseCode: '0000',
+    Status: 'TXN_SUCCESS',
+    Message: 'Fulfilled'
+  };
+
+  try {
+    // Extract ClientReference — same order as handlePaymentCallback
+    const reference = callbackData.ClientReference
+      || callbackData.Data?.ClientReference
+      || callbackData.data?.ClientReference;
+
+    if (!reference) {
+      console.error('FULFILMENT: No ClientReference found in payload');
+      console.error('Available keys:', Object.keys(callbackData));
+      return FULFILMENT_RESPONSE;
+    }
+
+    // Use aggregation pipeline update so completedAt can be set conditionally
+    // (handles race condition where fulfilment arrives before payment callback)
+    const { Donation } = require('../models');
+    const donation = await Donation.findOneAndUpdate(
+      { reference, fulfilledAt: { $exists: false } },
+      [{
+        $set: {
+          status: 'fulfilled',
+          fulfilledAt: '$$NOW',
+          completedAt: { $ifNull: ['$completedAt', '$$NOW'] }
+        }
+      }],
+      { new: true }
+    );
+
+    if (donation) {
+      console.log(`Fulfilment recorded for ${reference} (donation: ${donation._id})`);
+    } else {
+      console.warn(`FULFILMENT: No matching donation for reference ${reference} (already fulfilled or not found)`);
+    }
+
+  } catch (error) {
+    // Never propagate errors — Hubtel must always receive TXN_SUCCESS
+    console.error('FULFILMENT: Error processing callback:', error.message);
+  }
+
+  return FULFILMENT_RESPONSE;
+}
+
 module.exports = {
   initiatePayment,
   handlePaymentCallback,
+  handleFulfilmentCallback,
   getPayment,
   getAllPayments,
   getStats,
