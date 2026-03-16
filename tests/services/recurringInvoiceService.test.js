@@ -120,6 +120,7 @@ describe('createRecurringInvoice — outbound request body', () => {
 
   afterEach(() => {
     config.hubtelRecurring.posSalesId = null;
+    config.hubtelRecurring.baseUrl = 'https://rip.hubtel.com/api/proxy';
     jest.clearAllMocks();
   });
 
@@ -132,9 +133,9 @@ describe('createRecurringInvoice — outbound request body', () => {
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Weekly');
 
-    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
     const expectedYear = new Date().getFullYear() + 1;
-    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+    expect(endYear).toBe(expectedYear);
   });
 
   test('monthly — PaymentInterval is Monthly and end date is ~2 years from now', async () => {
@@ -146,9 +147,9 @@ describe('createRecurringInvoice — outbound request body', () => {
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Monthly');
 
-    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
     const expectedYear = new Date().getFullYear() + 2;
-    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+    expect(endYear).toBe(expectedYear);
   });
 
   test('annually — PaymentInterval is Yearly and end date is ~10 years from now', async () => {
@@ -160,8 +161,8 @@ describe('createRecurringInvoice — outbound request body', () => {
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Yearly');
 
-    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
     const expectedYear = new Date().getFullYear() + 10;
-    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+    expect(endYear).toBe(expectedYear);
   });
 });
