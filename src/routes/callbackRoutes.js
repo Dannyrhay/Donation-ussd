@@ -141,6 +141,33 @@ router.post('/recurring', async (req, res) => {
 });
 
 /**
+ * POST /api/callback/fulfilment
+ * Receives service fulfilment callbacks from Hubtel (one-time payments)
+ *
+ * IMPORTANT: Must ALWAYS return HTTP 200 with TXN_SUCCESS.
+ * Returning an error status risks Hubtel reversing the payment.
+ */
+router.post('/fulfilment', async (req, res) => {
+  console.log('='.repeat(50));
+  console.log('FULFILMENT CALLBACK RECEIVED');
+  console.log('='.repeat(50));
+
+  try {
+    const result = await paymentService.handleFulfilmentCallback(req.body);
+    res.json(result);
+  } catch (error) {
+    // Catch-all: never let an error propagate to Express error handler
+    // Hubtel must receive TXN_SUCCESS or it may reverse the payment
+    console.error('Fulfilment callback unexpected error:', error);
+    res.json({
+      ResponseCode: '0000',
+      Status: 'TXN_SUCCESS',
+      Message: 'Fulfilled'
+    });
+  }
+});
+
+/**
  * GET /api/callback/payments
  * List all payments/donations
  */
