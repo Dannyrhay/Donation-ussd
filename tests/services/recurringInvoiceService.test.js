@@ -94,3 +94,74 @@ describe('handleRecurringCallback', () => {
     expect(result.amount).toBeUndefined();
   });
 });
+
+// ─── createRecurringInvoice — request body ─────────────────────────────────
+
+jest.mock('axios');
+const axios = require('axios');
+const config = require('../../src/config');
+
+describe('createRecurringInvoice — outbound request body', () => {
+  const PHONE = '0244000000';
+  const AMOUNT = 30;
+  const CLIENT_REF = 'TEST-REF-001';
+
+  beforeEach(() => {
+    config.hubtelRecurring.posSalesId = 'POS-TEST';
+    config.hubtelRecurring.baseUrl = 'https://rip.hubtel.com/api/proxy';
+    axios.post.mockResolvedValue({
+      data: {
+        responseCode: '0001',
+        message: 'Success',
+        data: { recurringInvoiceId: 'INV-SIM', requestId: 'REQ-SIM' }
+      }
+    });
+  });
+
+  afterEach(() => {
+    config.hubtelRecurring.posSalesId = null;
+    jest.clearAllMocks();
+  });
+
+  test('weekly — PaymentInterval is Weekly and end date is ~1 year from now', async () => {
+    await createRecurringInvoice({
+      phoneNumber: PHONE, amount: AMOUNT, frequency: 'weekly',
+      description: 'Test', clientReference: CLIENT_REF
+    });
+
+    const body = axios.post.mock.calls[0][1];
+    expect(body.PaymentInterval).toBe('Weekly');
+
+    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const expectedYear = new Date().getFullYear() + 1;
+    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+  });
+
+  test('monthly — PaymentInterval is Monthly and end date is ~2 years from now', async () => {
+    await createRecurringInvoice({
+      phoneNumber: PHONE, amount: AMOUNT, frequency: 'monthly',
+      description: 'Test', clientReference: CLIENT_REF
+    });
+
+    const body = axios.post.mock.calls[0][1];
+    expect(body.PaymentInterval).toBe('Monthly');
+
+    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const expectedYear = new Date().getFullYear() + 2;
+    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+  });
+
+  test('annually — PaymentInterval is Yearly and end date is ~10 years from now', async () => {
+    await createRecurringInvoice({
+      phoneNumber: PHONE, amount: AMOUNT, frequency: 'annually',
+      description: 'Test', clientReference: CLIENT_REF
+    });
+
+    const body = axios.post.mock.calls[0][1];
+    expect(body.PaymentInterval).toBe('Yearly');
+
+    const endYear = new Date(body.InvoiceEndDate).getFullYear();
+    const expectedYear = new Date().getFullYear() + 10;
+    expect(Math.abs(endYear - expectedYear)).toBeLessThanOrEqual(1);
+  });
+});
