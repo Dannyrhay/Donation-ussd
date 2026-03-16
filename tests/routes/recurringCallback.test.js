@@ -84,7 +84,7 @@ describe('POST /api/callback/recurring', () => {
       recurringInvoiceId: 'INV-001',
       transactionId: 'TXN-001',
       clientReference: 'REF-001',
-      amount: 50
+      amount: 75
     });
     Subscription.findByRecurringInvoiceId.mockResolvedValue(mockSubscription);
 
@@ -94,11 +94,11 @@ describe('POST /api/callback/recurring', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(mockSubscription.recordPayment).toHaveBeenCalledWith(50);
+    expect(mockSubscription.recordPayment).toHaveBeenCalledWith(75);
     expect(Donation.create).toHaveBeenCalledWith(
       expect.objectContaining({
         phoneNumber: mockSubscription.phoneNumber,
-        amount: 50,
+        amount: 75,
         source: 'hubtel_recurring',
         status: 'Success'
       })
@@ -159,7 +159,20 @@ describe('POST /api/callback/recurring', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.message).toContain('no matching subscription');
+    expect(res.body.message).toBe('Callback received but no matching subscription found');
     expect(Donation.create).not.toHaveBeenCalled();
+  });
+
+  test('handler exception — returns HTTP 500', async () => {
+    recurringInvoiceService.handleRecurringCallback.mockImplementation(() => {
+      throw new Error('Unexpected error');
+    });
+
+    const res = await request(app)
+      .post(RECURRING_URL)
+      .send({ ResponseCode: '0000', Data: {} });
+
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
   });
 });
