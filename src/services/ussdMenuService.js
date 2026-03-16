@@ -111,6 +111,7 @@ function buildFrequencyMenu(amount) {
   menu += '2. Monthly\n';
   menu += '3. Annually\n';
   menu += '4. One-time\n';
+  menu += '5. Cancel subscription\n';
   menu += '0. Back';
 
   return menu;
@@ -228,7 +229,7 @@ async function processRequest(ussdRequest) {
       return handleCustomAmount(SessionId, Message);
 
     case 'frequency_selection':
-      return handleFrequencySelection(SessionId, Message, session);
+      return await handleFrequencySelection(SessionId, Message, session, Mobile);
 
     case 'confirmation':
       return await handleConfirmation(SessionId, Message, session, Mobile);
@@ -350,11 +351,10 @@ function handleCustomAmount(sessionId, input) {
 /**
  * Handle frequency selection step
  */
-function handleFrequencySelection(sessionId, input, session) {
+async function handleFrequencySelection(sessionId, input, session, mobile) {
   const choice = input.trim();
   const frequencies = config.frequencies;
 
-  // Handle back option - go to amount selection
   if (choice === '0') {
     updateSession(sessionId, { step: 'amount_selection', amount: null });
     return buildResponse(sessionId, ResponseType.RESPONSE, buildAmountMenu(), {
@@ -365,9 +365,57 @@ function handleFrequencySelection(sessionId, input, session) {
     });
   }
 
+  if (choice === '5') {
+    const formattedPhone = recurringInvoiceService.formatPhoneNumber(mobile);
+    let subscriptions;
+    try {
+      subscriptions = await donationService.getActiveSubscriptions(formattedPhone);
+    } catch (err) {
+      console.error('Error looking up subscriptions:', err);
+      return buildResponse(sessionId, ResponseType.RESPONSE,
+        'An error occurred. Please try again.\n\n' + buildFrequencyMenu(session.amount), {
+          label: 'Error',
+          clientState: 'frequency_selection',
+          dataType: 'input',
+          fieldType: 'number'
+        });
+    }
+
+    if (!subscriptions || subscriptions.length === 0) {
+      return buildResponse(sessionId, ResponseType.RESPONSE,
+        'You have no active subscription to cancel.\n\n' + buildFrequencyMenu(session.amount), {
+          label: 'No Subscription',
+          clientState: 'frequency_selection',
+          dataType: 'input',
+          fieldType: 'number'
+        });
+    }
+
+    const subscription = subscriptions[0];
+    updateSession(sessionId, {
+      step: 'cancellation_confirmation',
+      cancelSubscriptionId: subscription._id,
+      cancelFrequency: subscription.frequency,
+      cancelAmount: subscription.amount
+    });
+
+    const confirmMenu =
+      `Your ${subscription.frequency} subscription of GHS ${subscription.amount} will be cancelled.\n\n` +
+      '1. Confirm cancellation\n' +
+      '2. Keep subscription\n' +
+      '0. Back';
+
+    return buildResponse(sessionId, ResponseType.RESPONSE, confirmMenu, {
+      label: 'Confirm Cancellation',
+      clientState: 'cancellation_confirmation',
+      dataType: 'input',
+      fieldType: 'number'
+    });
+  }
+
   if (!frequencies[choice]) {
     return buildResponse(sessionId, ResponseType.RESPONSE,
-      'Invalid choice. Select 1-4 or 0 to go back:\n\n' + buildFrequencyMenu(session.amount), {
+      'Invalid choice. Select 1-5 or 0 to go back:\n\n' + buildFrequencyMenu(session.amount), {
         label: 'Invalid Frequency',
         clientState: 'frequency_selection',
         dataType: 'input',
