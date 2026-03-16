@@ -65,7 +65,7 @@ const donationSchema = new mongoose.Schema({
   // Payment status
   status: {
     type: String,
-    enum: ['pending', 'processing', 'completed', 'Success', 'failed', 'cancelled', 'refunded'],
+    enum: ['pending', 'processing', 'completed', 'fulfilled', 'Success', 'failed', 'cancelled', 'refunded'],
     default: 'pending',
     index: true
   },
@@ -104,6 +104,11 @@ const donationSchema = new mongoose.Schema({
 
   // When payment was completed
   completedAt: {
+    type: Date
+  },
+
+  // When service was fulfilled (set by fulfilment callback)
+  fulfilledAt: {
     type: Date
   },
 
@@ -174,11 +179,11 @@ donationSchema.statics.getTotalForPeriod = async function(startDate, endDate) {
   const result = await this.aggregate([
     {
       $match: {
-        status: 'completed',
-        completedAt: {
-          $gte: startDate,
-          $lte: endDate
-        }
+        status: { $in: ['completed', 'fulfilled'] },
+        $or: [
+          { completedAt: { $gte: startDate, $lte: endDate } },
+          { fulfilledAt: { $gte: startDate, $lte: endDate } }
+        ]
       }
     },
     {
