@@ -35,6 +35,7 @@ module.exports = {
   // Callbacks
   callbackUrl: process.env.CALLBACK_URL,
   recurringCallbackUrl: process.env.RECURRING_CALLBACK_URL || process.env.CALLBACK_URL,
+  fulfilmentCallbackUrl: process.env.FULFILMENT_CALLBACK_URL,
 
   // Organization
   orgName: process.env.ORG_NAME || 'Jesus Mission Fund',
