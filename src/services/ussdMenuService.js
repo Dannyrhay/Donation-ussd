@@ -464,10 +464,21 @@ async function handleCancellationConfirmation(sessionId, input, session) {
   }
 
   if (choice === '1') {
-    const result = await donationService.cancelSubscription(
-      session.cancelSubscriptionId,
-      'Cancelled by user via USSD'
-    );
+    let result;
+    try {
+      result = await donationService.cancelSubscription(
+        session.cancelSubscriptionId,
+        'Cancelled by user via USSD'
+      );
+    } catch (err) {
+      clearSession(sessionId);
+      return buildResponse(sessionId, ResponseType.RELEASE,
+        'Sorry, we could not cancel your subscription. Please contact support.', {
+          label: 'Cancel Failed',
+          clientState: 'cancel_failed',
+          dataType: 'display'
+        });
+    }
 
     if (result.success) {
       clearSession(sessionId);

@@ -156,7 +156,6 @@ async function createRecurringInvoice(invoiceData) {
   // Hubtel requires OrderDate to be in the future. We'll set it to 10 minutes from now.
   const futureDate = new Date();
   futureDate.setMinutes(futureDate.getMinutes() + 2);
-  
   const orderDate = formatHubtelDate(futureDate);
   const invoiceEndDate = formatHubtelDate(calculateEndDate(frequency));
 
