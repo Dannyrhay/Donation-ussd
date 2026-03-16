@@ -261,7 +261,7 @@ async function getStats() {
     ]);
 
     const donorCount = await Donor.countDocuments();
-    const totalDonations = await Donation.countDocuments({ status: 'completed' });
+    const totalDonations = await Donation.countDocuments({ status: { $in: ['completed', 'fulfilled'] } });
 
     return {
       today: todayStats,
