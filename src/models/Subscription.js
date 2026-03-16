@@ -299,7 +299,7 @@ subscriptionSchema.statics.findActiveByPhone = function(phoneNumber) {
   return this.find({
     phoneNumber,
     status: 'active'
-  });
+  }).sort({ createdAt: -1 });
 };
 
 /**
