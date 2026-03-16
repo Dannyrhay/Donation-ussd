@@ -234,6 +234,9 @@ async function processRequest(ussdRequest) {
     case 'confirmation':
       return await handleConfirmation(SessionId, Message, session, Mobile);
 
+    case 'cancellation_confirmation':
+      return await handleCancellationConfirmation(SessionId, Message, session);
+
     default:
       clearSession(SessionId);
       return buildResponse(SessionId, ResponseType.RELEASE, 'Session error. Please try again.', {
@@ -433,6 +436,61 @@ async function handleFrequencySelection(sessionId, input, session, mobile) {
   return buildResponse(sessionId, ResponseType.RESPONSE, buildConfirmationMenu(session.amount, frequency.name), {
     label: 'Confirm Donation',
     clientState: 'confirmation',
+    dataType: 'input',
+    fieldType: 'number'
+  });
+}
+
+/**
+ * Handle cancellation confirmation step
+ */
+async function handleCancellationConfirmation(sessionId, input, session) {
+  const choice = input.trim();
+
+  const confirmMenu =
+    `Your ${session.cancelFrequency} subscription of GHS ${session.cancelAmount} will be cancelled.\n\n` +
+    '1. Confirm cancellation\n' +
+    '2. Keep subscription\n' +
+    '0. Back';
+
+  if (choice === '0' || choice === '2') {
+    updateSession(sessionId, { step: 'frequency_selection' });
+    return buildResponse(sessionId, ResponseType.RESPONSE, buildFrequencyMenu(session.amount), {
+      label: 'Select Frequency',
+      clientState: 'frequency_selection',
+      dataType: 'input',
+      fieldType: 'number'
+    });
+  }
+
+  if (choice === '1') {
+    const result = await donationService.cancelSubscription(
+      session.cancelSubscriptionId,
+      'Cancelled by user via USSD'
+    );
+
+    if (result.success) {
+      clearSession(sessionId);
+      return buildResponse(sessionId, ResponseType.RELEASE,
+        'Your subscription has been cancelled. Thank you for your support.', {
+          label: 'Cancelled',
+          clientState: 'subscription_cancelled',
+          dataType: 'display'
+        });
+    } else {
+      clearSession(sessionId);
+      return buildResponse(sessionId, ResponseType.RELEASE,
+        'Sorry, we could not cancel your subscription. Please contact support.', {
+          label: 'Cancel Failed',
+          clientState: 'cancel_failed',
+          dataType: 'display'
+        });
+    }
+  }
+
+  return buildResponse(sessionId, ResponseType.RESPONSE, confirmMenu, {
+    label: 'Invalid Choice',
+    clientState: 'cancellation_confirmation',
     dataType: 'input',
     fieldType: 'number'
   });

@@ -125,3 +125,86 @@ describe('USSD frequency menu — cancel subscription option', () => {
     expect(response.Message).toMatch(/1-5/);
   });
 });
+
+describe('USSD cancellation confirmation step', () => {
+  const SESSION = 'TEST-CANCEL-002';
+  const MOBILE = '0244000000';
+
+  async function navigateToCancellationConfirmation(sessionId, mobile) {
+    clearSession(sessionId);
+    jest.clearAllMocks();
+    await processRequest({ SessionId: sessionId, Type: 'Initiation', Message: '', Mobile: mobile, Sequence: 1 });
+    await processRequest({ SessionId: sessionId, Type: 'Response', Message: '1', Mobile: mobile });
+
+    donationService.getActiveSubscriptions.mockResolvedValue([{
+      _id: 'SUB-ID-2',
+      frequency: 'weekly',
+      amount: 20
+    }]);
+    await processRequest({ SessionId: sessionId, Type: 'Response', Message: '5', Mobile: mobile });
+  }
+
+  beforeEach(async () => {
+    await navigateToCancellationConfirmation(SESSION, MOBILE);
+  });
+
+  afterAll(() => {
+    clearSession(SESSION);
+  });
+
+  test('replying 1 calls cancelSubscription and returns Release with success message', async () => {
+    donationService.cancelSubscription.mockResolvedValue({
+      success: true,
+      subscription: { _id: 'SUB-ID-2', status: 'cancelled' }
+    });
+
+    const response = await processRequest({
+      SessionId: SESSION, Type: 'Response', Message: '1', Mobile: MOBILE
+    });
+
+    expect(donationService.cancelSubscription).toHaveBeenCalledWith('SUB-ID-2', 'Cancelled by user via USSD');
+    expect(response.Type).toBe(ResponseType.RELEASE);
+    expect(response.Message).toContain('cancelled');
+  });
+
+  test('replying 2 returns to frequency_selection', async () => {
+    const response = await processRequest({
+      SessionId: SESSION, Type: 'Response', Message: '2', Mobile: MOBILE
+    });
+
+    expect(response.Type).toBe(ResponseType.RESPONSE);
+    expect(response.Message).toContain('Cancel subscription');
+  });
+
+  test('replying 0 returns to frequency_selection', async () => {
+    const response = await processRequest({
+      SessionId: SESSION, Type: 'Response', Message: '0', Mobile: MOBILE
+    });
+
+    expect(response.Type).toBe(ResponseType.RESPONSE);
+    expect(response.Message).toContain('Cancel subscription');
+  });
+
+  test('cancelSubscription failure returns Release with error message', async () => {
+    donationService.cancelSubscription.mockResolvedValue({
+      success: false,
+      error: 'Hubtel cancel failed'
+    });
+
+    const response = await processRequest({
+      SessionId: SESSION, Type: 'Response', Message: '1', Mobile: MOBILE
+    });
+
+    expect(response.Type).toBe(ResponseType.RELEASE);
+    expect(response.Message).toContain('could not cancel');
+  });
+
+  test('invalid input re-shows confirmation menu', async () => {
+    const response = await processRequest({
+      SessionId: SESSION, Type: 'Response', Message: '9', Mobile: MOBILE
+    });
+
+    expect(response.Type).toBe(ResponseType.RESPONSE);
+    expect(response.Message).toContain('Confirm cancellation');
+  });
+});
