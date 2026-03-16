@@ -130,20 +130,42 @@ If the sandbox does not have a simulation trigger:
 
 ### How to confirm "daily takes money the next day"
 
-1. Create a `weekly` or `daily` invoice today
-2. Note the timestamp of the **first** donation (`createdAt`)
-3. When the second callback arrives, compare the new donation's `createdAt` against the first
-4. The difference should match the configured interval (7 days for weekly, 1 day for daily)
+1. After creating a `daily` invoice, check the Hubtel sandbox dashboard the next calendar day to confirm the subscription is still active and a second charge has been queued.
+2. A successful charge will appear as an incoming callback at `/api/callback/recurring` with `ResponseCode: "0000"` — watch the ngrok inspector at **http://127.0.0.1:4040** and your server logs for this event.
+3. The ngrok inspector will show the POST request with the exact timestamp of the second charge, confirming it arrived on the next calendar day.
+4. A new `Donation` document in MongoDB will have `createdAt` on the next day — verify with:
+
+```bash
+curl -s http://localhost:3000/api/callback/payments | \
+  jq '[.donations[] | select(.source=="hubtel_recurring")] | sort_by(.createdAt) | .[-1] | .createdAt'
+# Expected: a timestamp falling on the calendar day after the invoice was created
+```
+
+**Bonus — compare both donation timestamps directly:**
 
 ```bash
 curl -s http://localhost:3000/api/callback/payments | \
   jq '[.donations[] | select(.source=="hubtel_recurring")] | sort_by(.createdAt) | .[-2:] | map(.createdAt)'
-# Shows the timestamps of the two most recent recurring donations
+# Shows the timestamps of the two most recent recurring donations; the difference should be ~1 day
 ```
 
 ---
 
-## Step 5: Test cancellation via USSD
+## Step 5: Test cancellation
+
+### Option A: Direct API call
+
+You can cancel a subscription directly without going through USSD:
+
+```bash
+curl -s -X POST http://localhost:3000/api/callback/subscriptions/{subscription-id}/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Testing cancellation"}'
+```
+
+Replace `{subscription-id}` with the `_id` value returned by `GET /api/callback/subscriptions`. A successful response will show the subscription's `status` updated to `"cancelled"`.
+
+### Option B: USSD cancellation flow
 
 Use the USSD flow to cancel the subscription:
 
