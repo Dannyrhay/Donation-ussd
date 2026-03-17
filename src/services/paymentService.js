@@ -375,6 +375,20 @@ async function handleFulfilmentCallback(callbackData) {
     console.error('FULFILMENT: Error processing callback:', error.message);
   }
 
+  // POST acknowledgement back to Hubtel's callback endpoint
+  // (Hubtel expects this separate POST in addition to the HTTP response)
+  try {
+    const ackUrl = config.hubtelFulfilmentAckUrl;
+    await axios.post(ackUrl, FULFILMENT_RESPONSE, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 5000
+    });
+    console.log(`FULFILMENT: Acknowledgement posted to ${ackUrl}`);
+  } catch (ackError) {
+    // Log but never fail — the HTTP response still carries TXN_SUCCESS
+    console.warn(`FULFILMENT: Could not POST acknowledgement to Hubtel: ${ackError.message}`);
+  }
+
   return FULFILMENT_RESPONSE;
 }
 

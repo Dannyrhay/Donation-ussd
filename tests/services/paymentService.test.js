@@ -12,7 +12,8 @@ jest.mock('../../src/models', () => ({
 jest.mock('../../src/config', () => ({
   hubtel: { apiKey: null, apiSecret: null, merchantId: null, baseUrl: '' },
   callbackUrl: 'http://test/callback',
-  fulfilmentCallbackUrl: 'http://test/fulfilment'
+  fulfilmentCallbackUrl: 'http://test/fulfilment',
+  hubtelFulfilmentAckUrl: 'https://gs-callback.hubtel.com/callback'
 }));
 
 // Mock donationService to avoid DB calls
@@ -24,10 +25,16 @@ jest.mock('../../src/services/donationService', () => ({
   getStats: jest.fn()
 }));
 
+// Mock axios to prevent real HTTP calls for the ack POST
+jest.mock('axios');
+const axios = require('axios');
+
 const paymentService = require('../../src/services/paymentService');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default: ack POST succeeds
+  axios.post.mockResolvedValue({ status: 200 });
 });
 
 describe('handleFulfilmentCallback', () => {
@@ -102,6 +109,28 @@ describe('handleFulfilmentCallback', () => {
 
   test('still returns TXN_SUCCESS when DB throws', async () => {
     mockFindOneAndUpdate.mockRejectedValue(new Error('DB error'));
+
+    const result = await paymentService.handleFulfilmentCallback(basePayload);
+
+    expect(result.ResponseCode).toBe('0000');
+    expect(result.Status).toBe('TXN_SUCCESS');
+  });
+
+  test('posts TXN_SUCCESS acknowledgement to Hubtel ack URL', async () => {
+    mockFindOneAndUpdate.mockResolvedValue({ _id: 'abc' });
+
+    await paymentService.handleFulfilmentCallback(basePayload);
+
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://gs-callback.hubtel.com/callback',
+      { ResponseCode: '0000', Status: 'TXN_SUCCESS', Message: 'Fulfilled' },
+      expect.objectContaining({ headers: { 'Content-Type': 'application/json' } })
+    );
+  });
+
+  test('still returns TXN_SUCCESS even when ack POST to Hubtel fails', async () => {
+    mockFindOneAndUpdate.mockResolvedValue({ _id: 'abc' });
+    axios.post.mockRejectedValue(new Error('Network error'));
 
     const result = await paymentService.handleFulfilmentCallback(basePayload);
 

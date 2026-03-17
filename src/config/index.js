@@ -36,6 +36,8 @@ module.exports = {
   callbackUrl: process.env.CALLBACK_URL,
   recurringCallbackUrl: process.env.RECURRING_CALLBACK_URL || process.env.CALLBACK_URL,
   fulfilmentCallbackUrl: process.env.FULFILMENT_CALLBACK_URL,
+  // Hubtel's acknowledgement endpoint — we POST TXN_SUCCESS here after processing a fulfilment callback
+  hubtelFulfilmentAckUrl: process.env.HUBTEL_FULFILMENT_ACK_URL || 'https://gs-callback.hubtel.com/callback',
 
   // Organization
   orgName: process.env.ORG_NAME || 'Jesus Mission Fund',
