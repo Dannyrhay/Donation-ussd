@@ -1,11 +1,14 @@
 // tests/services/paymentService.test.js
 'use strict';
 
-// Mock the models barrel — handleFulfilmentCallback uses require('../models')
-// so we must mock that resolved path, not the individual Donation file
+// Mock the models barrel
+const mockFindOne = jest.fn();
 const mockFindOneAndUpdate = jest.fn();
 jest.mock('../../src/models', () => ({
-  Donation: { findOneAndUpdate: mockFindOneAndUpdate }
+  Donation: {
+    findOne: mockFindOne,
+    findOneAndUpdate: mockFindOneAndUpdate
+  }
 }));
 
 // Mock config
@@ -136,5 +139,65 @@ describe('handleFulfilmentCallback', () => {
 
     expect(result.ResponseCode).toBe('0000');
     expect(result.Status).toBe('TXN_SUCCESS');
+  });
+});
+
+describe('handlePaymentCallback', () => {
+  // Real Hubtel payment callback format:
+  //   { SessionId, OrderId, ExtraData, OrderInfo: { Status, Amount, ... } }
+  const mockDonation = { _id: 'abc', reference: 'DON-1234567890', status: 'pending' };
+
+  const basePayload = {
+    SessionId: '8d440a43a98b4614b9df22b79c8190b8',
+    OrderId: '97473921905444d2ae166ec4c38787d5',
+    OrderInfo: { Status: 'Success', Amount: 5 },
+    ExtraData: null
+  };
+
+  beforeEach(() => {
+    // donationService.updateDonationStatus is already mocked above
+    const donationService = require('../../src/services/donationService');
+    donationService.updateDonationStatus.mockResolvedValue({ success: true, donation: mockDonation });
+  });
+
+  test('finds donation by SessionId and marks it Success', async () => {
+    mockFindOne.mockResolvedValue(mockDonation);
+
+    const result = await paymentService.handlePaymentCallback(basePayload);
+
+    expect(mockFindOne).toHaveBeenCalledWith({ sessionId: '8d440a43a98b4614b9df22b79c8190b8' });
+    expect(result).toEqual(mockDonation);
+    const donationService = require('../../src/services/donationService');
+    expect(donationService.updateDonationStatus).toHaveBeenCalledWith('DON-1234567890', 'Success', basePayload);
+  });
+
+  test('falls back to OrderId when SessionId lookup returns null', async () => {
+    mockFindOne
+      .mockResolvedValueOnce(null)          // SessionId lookup misses
+      .mockResolvedValueOnce(mockDonation); // OrderId lookup hits
+
+    await paymentService.handlePaymentCallback(basePayload);
+
+    expect(mockFindOne).toHaveBeenCalledTimes(2);
+    expect(mockFindOne).toHaveBeenLastCalledWith({ hubtelOrderId: '97473921905444d2ae166ec4c38787d5' });
+  });
+
+  test('reads payment status from OrderInfo.Status', async () => {
+    mockFindOne.mockResolvedValue(mockDonation);
+    const donationService = require('../../src/services/donationService');
+
+    await paymentService.handlePaymentCallback({ ...basePayload, OrderInfo: { Status: 'Failed' } });
+
+    expect(donationService.updateDonationStatus).toHaveBeenCalledWith('DON-1234567890', 'Failed', expect.any(Object));
+  });
+
+  test('returns null when no donation found by any identifier', async () => {
+    mockFindOne.mockResolvedValue(null);
+
+    const result = await paymentService.handlePaymentCallback(basePayload);
+
+    expect(result).toBeNull();
+    const donationService = require('../../src/services/donationService');
+    expect(donationService.updateDonationStatus).not.toHaveBeenCalled();
   });
 });

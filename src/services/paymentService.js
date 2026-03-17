@@ -201,23 +201,27 @@ async function handlePaymentCallback(callbackData) {
   console.log('Raw Data:', JSON.stringify(callbackData, null, 2));
   console.log('='.repeat(50));
 
-  // Extract reference from multiple possible locations
-  const reference = callbackData.ClientReference
+  // Hubtel payment callback format:
+  //   SessionId  — the USSD session ID from the original payment request
+  //   OrderId    — Hubtel's internal order ID (stored on donation at initiation)
+  //   OrderInfo  — contains payment result (Status, Amount, TransactionId, etc.)
+  //   ExtraData  — additional data passed at payment initiation
+  const sessionId = callbackData.SessionId;
+  const orderId = callbackData.OrderId;
+
+  // Legacy fallback: older callbacks may still include ClientReference
+  const legacyReference = callbackData.ClientReference
     || callbackData.Data?.ClientReference
     || callbackData.data?.ClientReference;
 
-  if (!reference) {
-    console.error('ERROR: No reference found in callback data');
-    console.error('Available keys:', Object.keys(callbackData));
-    return null;
-  }
-
   // Determine if payment was successful
-  // Hubtel uses various indicators for success
+  // Check OrderInfo.Status (new format) as well as top-level/Data fields (legacy)
   const responseCode = callbackData.ResponseCode || callbackData.Data?.ResponseCode;
-  const statusValue = callbackData.Status || callbackData.Data?.Status || callbackData.data?.Status;
+  const statusValue = callbackData.OrderInfo?.Status
+    || callbackData.Status
+    || callbackData.Data?.Status
+    || callbackData.data?.Status;
 
-  // Success indicators
   const isSuccess =
     responseCode === '0000' ||
     statusValue === 'Success' ||
@@ -227,10 +231,30 @@ async function handlePaymentCallback(callbackData) {
 
   const finalStatus = isSuccess ? 'Success' : (statusValue || 'Failed');
 
-  console.log(`Reference: ${reference}`);
-  console.log(`ResponseCode: ${responseCode}`);
-  console.log(`Status Value: ${statusValue}`);
-  console.log(`Final Status: ${finalStatus} (${isSuccess ? 'SUCCESS' : 'FAILED'})`);
+  console.log(`SessionId: ${sessionId} | OrderId: ${orderId}`);
+  console.log(`Status Value: ${statusValue} | Final Status: ${finalStatus} (${isSuccess ? 'SUCCESS' : 'FAILED'})`);
+
+  // Look up donation by SessionId, then OrderId, then legacy ClientReference
+  const { Donation } = require('../models');
+  let donation = null;
+
+  if (sessionId) {
+    donation = await Donation.findOne({ sessionId });
+  }
+  if (!donation && orderId) {
+    donation = await Donation.findOne({ hubtelOrderId: orderId });
+  }
+  if (!donation && legacyReference) {
+    donation = await Donation.findOne({ reference: legacyReference });
+  }
+
+  if (!donation) {
+    console.error('ERROR: No donation found for callback');
+    console.error(`SessionId: ${sessionId} | OrderId: ${orderId} | LegacyRef: ${legacyReference}`);
+    return null;
+  }
+
+  const reference = donation.reference;
 
   // Update donation in database
   const result = await donationService.updateDonationStatus(reference, finalStatus, callbackData);
