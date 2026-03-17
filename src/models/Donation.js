@@ -81,6 +81,13 @@ const donationSchema = new mongoose.Schema({
     type: String
   },
 
+  // Hubtel order ID (returned when payment is initiated — used to match fulfilment callbacks)
+  hubtelOrderId: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+
   // Hubtel response data
   hubtelResponse: {
     type: mongoose.Schema.Types.Mixed

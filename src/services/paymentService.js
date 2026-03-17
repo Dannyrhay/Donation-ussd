@@ -148,6 +148,14 @@ async function initiatePayment(paymentData) {
 
     console.log('Hubtel Payment Response:', JSON.stringify(response.data, null, 2));
 
+    // Store Hubtel's OrderId so we can match it against the fulfilment callback later
+    const hubtelOrderId = response.data?.Data?.OrderId || response.data?.data?.OrderId;
+    if (hubtelOrderId) {
+      const { Donation } = require('../models');
+      await Donation.findOneAndUpdate({ reference }, { hubtelOrderId });
+      console.log(`Stored Hubtel OrderId ${hubtelOrderId} for reference ${reference}`);
+    }
+
     return {
       success: true,
       simulated: false,
@@ -296,22 +304,41 @@ async function handleFulfilmentCallback(callbackData) {
   };
 
   try {
-    // Extract ClientReference — same order as handlePaymentCallback
-    const reference = callbackData.ClientReference
-      || callbackData.Data?.ClientReference
-      || callbackData.data?.ClientReference;
+    // Hubtel fulfilment callback fields (real payload format):
+    //   SessionId    — the USSD session ID from the original payment request
+    //   OrderId      — Hubtel's internal order ID (stored on donation at initiation)
+    //   ServiceStatus — "success" if the payment was successful
+    //   MetaData     — optional metadata
 
-    if (!reference) {
-      console.error('FULFILMENT: No ClientReference found in payload');
+    const serviceStatus = callbackData.ServiceStatus;
+    if (serviceStatus && serviceStatus.toLowerCase() !== 'success') {
+      console.warn(`FULFILMENT: ServiceStatus is "${serviceStatus}" — not marking as fulfilled`);
+      return FULFILMENT_RESPONSE;
+    }
+
+    const { Donation } = require('../models');
+
+    // Look up donation by SessionId first (USSD session), then by Hubtel OrderId
+    const sessionId = callbackData.SessionId;
+    const orderId = callbackData.OrderId;
+
+    let query = null;
+    if (sessionId) {
+      query = { sessionId, fulfilledAt: { $exists: false } };
+    } else if (orderId) {
+      query = { hubtelOrderId: orderId, fulfilledAt: { $exists: false } };
+    }
+
+    if (!query) {
+      console.error('FULFILMENT: No SessionId or OrderId found in payload');
       console.error('Available keys:', Object.keys(callbackData));
       return FULFILMENT_RESPONSE;
     }
 
     // Use aggregation pipeline update so completedAt can be set conditionally
     // (handles race condition where fulfilment arrives before payment callback)
-    const { Donation } = require('../models');
-    const donation = await Donation.findOneAndUpdate(
-      { reference, fulfilledAt: { $exists: false } },
+    let donation = await Donation.findOneAndUpdate(
+      query,
       [{
         $set: {
           status: 'fulfilled',
@@ -322,10 +349,25 @@ async function handleFulfilmentCallback(callbackData) {
       { new: true }
     );
 
+    // Fallback: if not found by SessionId, try OrderId
+    if (!donation && sessionId && orderId) {
+      donation = await Donation.findOneAndUpdate(
+        { hubtelOrderId: orderId, fulfilledAt: { $exists: false } },
+        [{
+          $set: {
+            status: 'fulfilled',
+            fulfilledAt: '$$NOW',
+            completedAt: { $ifNull: ['$completedAt', '$$NOW'] }
+          }
+        }],
+        { new: true }
+      );
+    }
+
     if (donation) {
-      console.log(`Fulfilment recorded for ${reference} (donation: ${donation._id})`);
+      console.log(`Fulfilment recorded for donation ${donation._id} (SessionId: ${sessionId}, OrderId: ${orderId})`);
     } else {
-      console.warn(`FULFILMENT: No matching donation for reference ${reference} (already fulfilled or not found)`);
+      console.warn(`FULFILMENT: No matching donation found (SessionId: ${sessionId}, OrderId: ${orderId})`);
     }
 
   } catch (error) {

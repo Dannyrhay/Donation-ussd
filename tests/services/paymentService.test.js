@@ -31,45 +31,71 @@ beforeEach(() => {
 });
 
 describe('handleFulfilmentCallback', () => {
+  // Real Hubtel fulfilment callback format (as documented by Hubtel):
+  //   POST https://gs-callback.hubtel.com:9055/callback
+  //   { SessionId, OrderId, ServiceStatus, MetaData }
   const basePayload = {
-    ResponseCode: '0000',
-    Status: 'Success',
-    Data: {
-      Amount: 10,
-      ClientReference: 'DON-1234567890',
-      TransactionId: 'HBT-TXN-001',
-      CustomerMsisdn: '233244000000'
-    }
+    SessionId: '8d440a43a98b4614b9df22b79c8190b8',
+    OrderId: '97473921905444d2ae166ec4c38787d5',
+    ServiceStatus: 'success',
+    MetaData: null
   };
 
-  test('updates donation to fulfilled when found and not yet fulfilled', async () => {
-    const mockDonation = { _id: 'abc', status: 'completed', reference: 'DON-1234567890' };
+  test('updates donation to fulfilled using SessionId lookup', async () => {
+    const mockDonation = { _id: 'abc', status: 'completed' };
     mockFindOneAndUpdate.mockResolvedValue(mockDonation);
 
     const result = await paymentService.handleFulfilmentCallback(basePayload);
 
     expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
-      { reference: 'DON-1234567890', fulfilledAt: { $exists: false } },
-      expect.any(Array), // aggregation pipeline
+      { sessionId: '8d440a43a98b4614b9df22b79c8190b8', fulfilledAt: { $exists: false } },
+      expect.any(Array),
       { new: true }
     );
     expect(result.ResponseCode).toBe('0000');
     expect(result.Status).toBe('TXN_SUCCESS');
   });
 
-  test('still returns TXN_SUCCESS when donation not found (findOneAndUpdate returns null)', async () => {
-    mockFindOneAndUpdate.mockResolvedValue(null);
+  test('falls back to OrderId lookup when SessionId lookup returns null', async () => {
+    // First call (by sessionId) returns null, second call (by hubtelOrderId) finds the donation
+    mockFindOneAndUpdate
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'abc' });
 
-    const result = await paymentService.handleFulfilmentCallback(basePayload);
+    await paymentService.handleFulfilmentCallback(basePayload);
 
+    expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(2);
+    expect(mockFindOneAndUpdate).toHaveBeenLastCalledWith(
+      { hubtelOrderId: '97473921905444d2ae166ec4c38787d5', fulfilledAt: { $exists: false } },
+      expect.any(Array),
+      { new: true }
+    );
+  });
+
+  test('skips DB update and still returns TXN_SUCCESS when ServiceStatus is not success', async () => {
+    const result = await paymentService.handleFulfilmentCallback({
+      ...basePayload,
+      ServiceStatus: 'failed'
+    });
+
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
     expect(result.ResponseCode).toBe('0000');
     expect(result.Status).toBe('TXN_SUCCESS');
   });
 
-  test('still returns TXN_SUCCESS when ClientReference is missing', async () => {
-    const result = await paymentService.handleFulfilmentCallback({});
+  test('still returns TXN_SUCCESS when both SessionId and OrderId are missing', async () => {
+    const result = await paymentService.handleFulfilmentCallback({ ServiceStatus: 'success' });
 
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(result.ResponseCode).toBe('0000');
+    expect(result.Status).toBe('TXN_SUCCESS');
+  });
+
+  test('still returns TXN_SUCCESS when donation not found', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+
+    const result = await paymentService.handleFulfilmentCallback(basePayload);
+
     expect(result.ResponseCode).toBe('0000');
     expect(result.Status).toBe('TXN_SUCCESS');
   });
@@ -81,31 +107,5 @@ describe('handleFulfilmentCallback', () => {
 
     expect(result.ResponseCode).toBe('0000');
     expect(result.Status).toBe('TXN_SUCCESS');
-  });
-
-  test('extracts ClientReference from top-level field', async () => {
-    mockFindOneAndUpdate.mockResolvedValue({});
-    const payload = { ClientReference: 'DON-TOP-LEVEL', Data: {} };
-
-    await paymentService.handleFulfilmentCallback(payload);
-
-    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ reference: 'DON-TOP-LEVEL' }),
-      expect.any(Array),
-      { new: true }
-    );
-  });
-
-  test('extracts ClientReference from lowercase data field', async () => {
-    mockFindOneAndUpdate.mockResolvedValue({});
-    const payload = { data: { ClientReference: 'DON-LOWERCASE' } };
-
-    await paymentService.handleFulfilmentCallback(payload);
-
-    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ reference: 'DON-LOWERCASE' }),
-      expect.any(Array),
-      { new: true }
-    );
   });
 });
