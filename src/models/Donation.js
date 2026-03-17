@@ -81,6 +81,14 @@ const donationSchema = new mongoose.Schema({
     type: String
   },
 
+  // Hubtel payment session ID (returned in Hubtel's initiation response Data.SessionId)
+  // This is Hubtel's internal payment session — different from the USSD sessionId
+  hubtelSessionId: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+
   // Hubtel order ID (returned when payment is initiated — used to match fulfilment callbacks)
   hubtelOrderId: {
     type: String,

@@ -148,12 +148,14 @@ async function initiatePayment(paymentData) {
 
     console.log('Hubtel Payment Response:', JSON.stringify(response.data, null, 2));
 
-    // Store Hubtel's OrderId so we can match it against the fulfilment callback later
+    // Store Hubtel's SessionId and OrderId from the initiation response
+    // These are used to match payment and fulfilment callbacks back to this donation
+    const hubtelSessionId = response.data?.Data?.SessionId || response.data?.data?.SessionId;
     const hubtelOrderId = response.data?.Data?.OrderId || response.data?.data?.OrderId;
-    if (hubtelOrderId) {
+    if (hubtelSessionId || hubtelOrderId) {
       const { Donation } = require('../models');
-      await Donation.findOneAndUpdate({ reference }, { hubtelOrderId });
-      console.log(`Stored Hubtel OrderId ${hubtelOrderId} for reference ${reference}`);
+      await Donation.findOneAndUpdate({ reference }, { hubtelSessionId, hubtelOrderId });
+      console.log(`Stored Hubtel identifiers — SessionId: ${hubtelSessionId}, OrderId: ${hubtelOrderId}`);
     }
 
     return {
@@ -234,12 +236,12 @@ async function handlePaymentCallback(callbackData) {
   console.log(`SessionId: ${sessionId} | OrderId: ${orderId}`);
   console.log(`Status Value: ${statusValue} | Final Status: ${finalStatus} (${isSuccess ? 'SUCCESS' : 'FAILED'})`);
 
-  // Look up donation by SessionId, then OrderId, then legacy ClientReference
+  // Look up donation — try hubtelSessionId first, then hubtelOrderId, then legacy ClientReference
   const { Donation } = require('../models');
   let donation = null;
 
   if (sessionId) {
-    donation = await Donation.findOne({ sessionId });
+    donation = await Donation.findOne({ hubtelSessionId: sessionId });
   }
   if (!donation && orderId) {
     donation = await Donation.findOne({ hubtelOrderId: orderId });
@@ -250,7 +252,7 @@ async function handlePaymentCallback(callbackData) {
 
   if (!donation) {
     console.error('ERROR: No donation found for callback');
-    console.error(`SessionId: ${sessionId} | OrderId: ${orderId} | LegacyRef: ${legacyReference}`);
+    console.error(`hubtelSessionId: ${sessionId} | hubtelOrderId: ${orderId} | LegacyRef: ${legacyReference}`);
     return null;
   }
 
@@ -342,56 +344,37 @@ async function handleFulfilmentCallback(callbackData) {
 
     const { Donation } = require('../models');
 
-    // Look up donation by SessionId first (USSD session), then by Hubtel OrderId
+    // Hubtel's SessionId in the callback = the payment session ID returned at initiation
+    // (stored as hubtelSessionId on the donation — distinct from the USSD sessionId)
     const sessionId = callbackData.SessionId;
     const orderId = callbackData.OrderId;
 
-    let query = null;
-    if (sessionId) {
-      query = { sessionId, fulfilledAt: { $exists: false } };
-    } else if (orderId) {
-      query = { hubtelOrderId: orderId, fulfilledAt: { $exists: false } };
-    }
-
-    if (!query) {
+    if (!sessionId && !orderId) {
       console.error('FULFILMENT: No SessionId or OrderId found in payload');
       console.error('Available keys:', Object.keys(callbackData));
       return FULFILMENT_RESPONSE;
     }
 
+    const pipeline = [{ $set: { status: 'fulfilled', fulfilledAt: '$$NOW', completedAt: { $ifNull: ['$completedAt', '$$NOW'] } } }];
+    const opts = { new: true };
+
     // Use aggregation pipeline update so completedAt can be set conditionally
     // (handles race condition where fulfilment arrives before payment callback)
-    let donation = await Donation.findOneAndUpdate(
-      query,
-      [{
-        $set: {
-          status: 'fulfilled',
-          fulfilledAt: '$$NOW',
-          completedAt: { $ifNull: ['$completedAt', '$$NOW'] }
-        }
-      }],
-      { new: true }
-    );
+    let donation = sessionId
+      ? await Donation.findOneAndUpdate({ hubtelSessionId: sessionId, fulfilledAt: { $exists: false } }, pipeline, opts)
+      : null;
 
-    // Fallback: if not found by SessionId, try OrderId
-    if (!donation && sessionId && orderId) {
+    // Fallback: try OrderId
+    if (!donation && orderId) {
       donation = await Donation.findOneAndUpdate(
-        { hubtelOrderId: orderId, fulfilledAt: { $exists: false } },
-        [{
-          $set: {
-            status: 'fulfilled',
-            fulfilledAt: '$$NOW',
-            completedAt: { $ifNull: ['$completedAt', '$$NOW'] }
-          }
-        }],
-        { new: true }
+        { hubtelOrderId: orderId, fulfilledAt: { $exists: false } }, pipeline, opts
       );
     }
 
     if (donation) {
-      console.log(`Fulfilment recorded for donation ${donation._id} (SessionId: ${sessionId}, OrderId: ${orderId})`);
+      console.log(`Fulfilment recorded for donation ${donation._id} (hubtelSessionId: ${sessionId}, hubtelOrderId: ${orderId})`);
     } else {
-      console.warn(`FULFILMENT: No matching donation found (SessionId: ${sessionId}, OrderId: ${orderId})`);
+      console.warn(`FULFILMENT: No matching donation found (hubtelSessionId: ${sessionId}, hubtelOrderId: ${orderId})`);
     }
 
   } catch (error) {
@@ -403,11 +386,12 @@ async function handleFulfilmentCallback(callbackData) {
   // (Hubtel expects this separate POST in addition to the HTTP response)
   try {
     const ackUrl = config.hubtelFulfilmentAckUrl;
-    await axios.post(ackUrl, FULFILMENT_RESPONSE, {
+    console.log(`FULFILMENT: Posting acknowledgement to ${ackUrl}:`, JSON.stringify(FULFILMENT_RESPONSE));
+    const ackResponse = await axios.post(ackUrl, FULFILMENT_RESPONSE, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 5000
     });
-    console.log(`FULFILMENT: Acknowledgement posted to ${ackUrl}`);
+    console.log(`FULFILMENT: Acknowledgement response status: ${ackResponse.status}`);
   } catch (ackError) {
     // Log but never fail — the HTTP response still carries TXN_SUCCESS
     console.warn(`FULFILMENT: Could not POST acknowledgement to Hubtel: ${ackError.message}`);
