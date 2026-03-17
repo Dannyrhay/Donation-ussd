@@ -204,39 +204,46 @@ async function handlePaymentCallback(callbackData) {
   console.log('='.repeat(50));
 
   // Hubtel payment callback format:
-  //   SessionId  — the USSD session ID from the original payment request
-  //   OrderId    — Hubtel's internal order ID (stored on donation at initiation)
-  //   OrderInfo  — contains payment result (Status, Amount, TransactionId, etc.)
-  //   ExtraData  — additional data passed at payment initiation
+  //   SessionId        — Hubtel's payment session ID (generated at payment processing, NOT at initiation)
+  //   OrderId          — Hubtel's internal order ID (same — not available at initiation)
+  //   OrderInfo        — payment result: CustomerMobileNumber, Items, Payment.IsSuccessful, etc.
+  //   ExtraData        — additional data
   const sessionId = callbackData.SessionId;
   const orderId = callbackData.OrderId;
-
-  // Legacy fallback: older callbacks may still include ClientReference
-  const legacyReference = callbackData.ClientReference
-    || callbackData.Data?.ClientReference
-    || callbackData.data?.ClientReference;
+  const customerPhone = callbackData.OrderInfo?.CustomerMobileNumber;
 
   // Determine if payment was successful
-  // Check OrderInfo.Status (new format) as well as top-level/Data fields (legacy)
+  // OrderInfo.Payment.IsSuccessful is the definitive flag in the new callback format
+  const isSuccessful = callbackData.OrderInfo?.Payment?.IsSuccessful === true;
   const responseCode = callbackData.ResponseCode || callbackData.Data?.ResponseCode;
   const statusValue = callbackData.OrderInfo?.Status
     || callbackData.Status
     || callbackData.Data?.Status
     || callbackData.data?.Status;
 
-  const isSuccess =
-    responseCode === '0000' ||
-    statusValue === 'Success' ||
-    statusValue === 'Successful' ||
-    statusValue === 'Paid' ||
-    statusValue === 'completed';
+  const isSuccess = isSuccessful
+    || responseCode === '0000'
+    || statusValue === 'Success'
+    || statusValue === 'Successful'
+    || statusValue === 'Paid'
+    || statusValue === 'completed';
 
   const finalStatus = isSuccess ? 'Success' : (statusValue || 'Failed');
 
-  console.log(`SessionId: ${sessionId} | OrderId: ${orderId}`);
-  console.log(`Status Value: ${statusValue} | Final Status: ${finalStatus} (${isSuccess ? 'SUCCESS' : 'FAILED'})`);
+  console.log(`SessionId: ${sessionId} | OrderId: ${orderId} | CustomerPhone: ${customerPhone}`);
+  console.log(`IsSuccessful: ${isSuccessful} | Status Value: ${statusValue} | Final Status: ${finalStatus}`);
 
-  // Look up donation — try hubtelSessionId first, then hubtelOrderId, then legacy ClientReference
+  // Fulfilment payload — echo SessionId and OrderId back to Hubtel to confirm service delivery
+  const fulfilmentPayload = {
+    SessionId: sessionId,
+    OrderId: orderId,
+    ServiceStatus: isSuccess ? 'success' : 'failed',
+    MetaData: null
+  };
+
+  // Look up donation:
+  //   1. hubtelSessionId / hubtelOrderId — only available if Hubtel returns them at initiation (may not)
+  //   2. CustomerMobileNumber — most reliable since it's always in the callback and stored on donation
   const { Donation } = require('../models');
   let donation = null;
 
@@ -246,28 +253,63 @@ async function handlePaymentCallback(callbackData) {
   if (!donation && orderId) {
     donation = await Donation.findOne({ hubtelOrderId: orderId });
   }
-  if (!donation && legacyReference) {
-    donation = await Donation.findOne({ reference: legacyReference });
+  if (!donation && customerPhone) {
+    // Match the most recent pending one-time donation for this phone number
+    donation = await Donation.findOne({
+      phoneNumber: customerPhone,
+      frequency: 'once',
+      status: 'pending'
+    });
   }
 
   if (!donation) {
     console.error('ERROR: No donation found for callback');
-    console.error(`hubtelSessionId: ${sessionId} | hubtelOrderId: ${orderId} | LegacyRef: ${legacyReference}`);
+    console.error(`SessionId: ${sessionId} | OrderId: ${orderId} | Phone: ${customerPhone}`);
+
+    // Still send fulfilment to Hubtel even if we can't record it locally
+    await sendFulfilmentToHubtel(fulfilmentPayload);
     return null;
   }
 
-  const reference = donation.reference;
+  // Store Hubtel identifiers on the donation for future reference
+  if (sessionId || orderId) {
+    await Donation.findOneAndUpdate(
+      { _id: donation._id },
+      { hubtelSessionId: sessionId, hubtelOrderId: orderId }
+    );
+  }
 
-  // Update donation in database
+  const reference = donation.reference;
   const result = await donationService.updateDonationStatus(reference, finalStatus, callbackData);
 
   if (result.success) {
     console.log(`Payment ${reference} updated to: ${result.donation.status}`);
+    // Send fulfilment confirmation to Hubtel
+    await sendFulfilmentToHubtel(fulfilmentPayload);
     return result.donation;
   }
 
   console.error(`Failed to update donation ${reference}`);
+  await sendFulfilmentToHubtel(fulfilmentPayload);
   return null;
+}
+
+/**
+ * POST fulfilment payload to Hubtel's callback endpoint.
+ * Hubtel expects this after every payment callback to confirm service delivery.
+ */
+async function sendFulfilmentToHubtel(payload) {
+  const ackUrl = config.hubtelFulfilmentAckUrl;
+  console.log(`FULFILMENT: Sending to ${ackUrl}:`, JSON.stringify(payload));
+  try {
+    const ackResponse = await axios.post(ackUrl, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 5000
+    });
+    console.log(`FULFILMENT: Response status: ${ackResponse.status}`);
+  } catch (err) {
+    console.warn(`FULFILMENT: POST failed: ${err.message}`);
+  }
 }
 
 /**
@@ -382,20 +424,14 @@ async function handleFulfilmentCallback(callbackData) {
     console.error('FULFILMENT: Error processing callback:', error.message);
   }
 
-  // POST acknowledgement back to Hubtel's callback endpoint
-  // (Hubtel expects this separate POST in addition to the HTTP response)
-  try {
-    const ackUrl = config.hubtelFulfilmentAckUrl;
-    console.log(`FULFILMENT: Posting acknowledgement to ${ackUrl}:`, JSON.stringify(FULFILMENT_RESPONSE));
-    const ackResponse = await axios.post(ackUrl, FULFILMENT_RESPONSE, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 5000
-    });
-    console.log(`FULFILMENT: Acknowledgement response status: ${ackResponse.status}`);
-  } catch (ackError) {
-    // Log but never fail — the HTTP response still carries TXN_SUCCESS
-    console.warn(`FULFILMENT: Could not POST acknowledgement to Hubtel: ${ackError.message}`);
-  }
+  // POST fulfilment confirmation back to Hubtel
+  // Payload echoes SessionId/OrderId from their callback with ServiceStatus: "success"
+  await sendFulfilmentToHubtel({
+    SessionId: callbackData.SessionId,
+    OrderId: callbackData.OrderId,
+    ServiceStatus: 'success',
+    MetaData: null
+  });
 
   return FULFILMENT_RESPONSE;
 }

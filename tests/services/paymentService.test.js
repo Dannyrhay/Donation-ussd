@@ -118,14 +118,19 @@ describe('handleFulfilmentCallback', () => {
     expect(result.Status).toBe('TXN_SUCCESS');
   });
 
-  test('posts TXN_SUCCESS acknowledgement to Hubtel ack URL', async () => {
+  test('posts fulfilment payload (SessionId/OrderId/ServiceStatus) to Hubtel ack URL', async () => {
     mockFindOneAndUpdate.mockResolvedValue({ _id: 'abc' });
 
     await paymentService.handleFulfilmentCallback(basePayload);
 
     expect(axios.post).toHaveBeenCalledWith(
       'https://gs-callback.hubtel.com/callback',
-      { ResponseCode: '0000', Status: 'TXN_SUCCESS', Message: 'Fulfilled' },
+      {
+        SessionId: '8d440a43a98b4614b9df22b79c8190b8',
+        OrderId: '97473921905444d2ae166ec4c38787d5',
+        ServiceStatus: 'success',
+        MetaData: null
+      },
       expect.objectContaining({ headers: { 'Content-Type': 'application/json' } })
     );
   });
@@ -143,60 +148,75 @@ describe('handleFulfilmentCallback', () => {
 
 describe('handlePaymentCallback', () => {
   // Real Hubtel payment callback format:
-  //   { SessionId, OrderId, ExtraData, OrderInfo: { Status, Amount, ... } }
+  //   { SessionId, OrderId, ExtraData, OrderInfo: { CustomerMobileNumber, Payment: { IsSuccessful } } }
   const mockDonation = { _id: 'abc', reference: 'DON-1234567890', status: 'pending' };
 
   const basePayload = {
     SessionId: '8d440a43a98b4614b9df22b79c8190b8',
     OrderId: '97473921905444d2ae166ec4c38787d5',
-    OrderInfo: { Status: 'Success', Amount: 5 },
-    ExtraData: null
+    OrderInfo: {
+      CustomerMobileNumber: '233244000000',
+      Payment: { IsSuccessful: true, AmountPaid: 5 }
+    },
+    ExtraData: {}
   };
 
   beforeEach(() => {
-    // donationService.updateDonationStatus is already mocked above
     const donationService = require('../../src/services/donationService');
     donationService.updateDonationStatus.mockResolvedValue({ success: true, donation: mockDonation });
+    // findOneAndUpdate used to store hubtelSessionId/OrderId after match
+    mockFindOneAndUpdate.mockResolvedValue(mockDonation);
   });
 
-  test('finds donation by hubtelSessionId and marks it Success', async () => {
+  test('detects success from OrderInfo.Payment.IsSuccessful', async () => {
     mockFindOne.mockResolvedValue(mockDonation);
-
-    const result = await paymentService.handlePaymentCallback(basePayload);
-
-    expect(mockFindOne).toHaveBeenCalledWith({ hubtelSessionId: '8d440a43a98b4614b9df22b79c8190b8' });
-    expect(result).toEqual(mockDonation);
     const donationService = require('../../src/services/donationService');
-    expect(donationService.updateDonationStatus).toHaveBeenCalledWith('DON-1234567890', 'Success', basePayload);
-  });
-
-  test('falls back to hubtelOrderId when SessionId lookup returns null', async () => {
-    mockFindOne
-      .mockResolvedValueOnce(null)          // hubtelSessionId lookup misses
-      .mockResolvedValueOnce(mockDonation); // hubtelOrderId lookup hits
 
     await paymentService.handlePaymentCallback(basePayload);
 
-    expect(mockFindOne).toHaveBeenCalledTimes(2);
-    expect(mockFindOne).toHaveBeenLastCalledWith({ hubtelOrderId: '97473921905444d2ae166ec4c38787d5' });
+    expect(donationService.updateDonationStatus).toHaveBeenCalledWith('DON-1234567890', 'Success', basePayload);
   });
 
-  test('reads payment status from OrderInfo.Status', async () => {
+  test('falls back to phone number lookup when hubtelSessionId/OrderId miss', async () => {
+    mockFindOne
+      .mockResolvedValueOnce(null)          // hubtelSessionId lookup misses
+      .mockResolvedValueOnce(null)          // hubtelOrderId lookup misses
+      .mockResolvedValue(mockDonation);     // phone + pending lookup hits
+
+    await paymentService.handlePaymentCallback(basePayload);
+
+    expect(mockFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneNumber: '233244000000', frequency: 'once', status: 'pending' })
+    );
+  });
+
+  test('sends fulfilment payload to Hubtel after successful payment', async () => {
     mockFindOne.mockResolvedValue(mockDonation);
-    const donationService = require('../../src/services/donationService');
 
-    await paymentService.handlePaymentCallback({ ...basePayload, OrderInfo: { Status: 'Failed' } });
+    await paymentService.handlePaymentCallback(basePayload);
 
-    expect(donationService.updateDonationStatus).toHaveBeenCalledWith('DON-1234567890', 'Failed', expect.any(Object));
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://gs-callback.hubtel.com/callback',
+      {
+        SessionId: '8d440a43a98b4614b9df22b79c8190b8',
+        OrderId: '97473921905444d2ae166ec4c38787d5',
+        ServiceStatus: 'success',
+        MetaData: null
+      },
+      expect.objectContaining({ headers: { 'Content-Type': 'application/json' } })
+    );
   });
 
-  test('returns null when no donation found by any identifier', async () => {
+  test('still sends fulfilment to Hubtel even when no donation found', async () => {
     mockFindOne.mockResolvedValue(null);
 
     const result = await paymentService.handlePaymentCallback(basePayload);
 
     expect(result).toBeNull();
-    const donationService = require('../../src/services/donationService');
-    expect(donationService.updateDonationStatus).not.toHaveBeenCalled();
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://gs-callback.hubtel.com/callback',
+      expect.objectContaining({ SessionId: '8d440a43a98b4614b9df22b79c8190b8' }),
+      expect.any(Object)
+    );
   });
 });
