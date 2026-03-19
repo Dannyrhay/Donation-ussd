@@ -41,8 +41,10 @@ function formatPhoneNumber(phone) {
 
 /**
  * Detect mobile network from phone number
- * MTN: 024, 054, 055, 059, 025
- * Vodafone/Telecel: 020, 050
+ * Returns Hubtel channel code with _rec suffix for recurring invoices
+ * MTN: 024, 054, 055, 059, 025 -> mtn_gh_rec
+ * Vodafone/Telecel: 020, 050 -> vodafone_gh_rec
+ * AirtelTigo: 026, 056, 027, 057 -> at_gh_rec
  */
 function detectNetwork(phoneNumber) {
   const cleaned = formatPhoneNumber(phoneNumber);
@@ -51,15 +53,18 @@ function detectNetwork(phoneNumber) {
 
   const mtnPrefixes = ['24', '54', '55', '59', '25'];
   const vodafonePrefixes = ['20', '50'];
+  const airtelTigoPrefixes = ['26', '56', '27', '57'];
 
   if (mtnPrefixes.includes(prefix)) {
-    return 'mtn-gh';
+    return 'mtn_gh_rec';
   } else if (vodafonePrefixes.includes(prefix)) {
-    return 'vodafone-gh';
+    return 'vodafone_gh_rec';
+  } else if (airtelTigoPrefixes.includes(prefix)) {
+    return 'at_gh_rec';
   }
 
   // Default to MTN if unknown
-  return 'mtn-gh';
+  return 'mtn_gh_rec';
 }
 
 

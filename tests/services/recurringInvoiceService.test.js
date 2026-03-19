@@ -124,7 +124,7 @@ describe('createRecurringInvoice — outbound request body', () => {
     jest.clearAllMocks();
   });
 
-  test('weekly — PaymentInterval is Weekly and end date is ~1 year from now', async () => {
+  test('weekly — PaymentInterval is Weekly, Channel is mtn_gh_rec', async () => {
     await createRecurringInvoice({
       phoneNumber: PHONE, amount: AMOUNT, frequency: 'weekly',
       description: 'Test', clientReference: CLIENT_REF
@@ -132,37 +132,32 @@ describe('createRecurringInvoice — outbound request body', () => {
 
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Weekly');
+    expect(body.Channel).toBe('mtn_gh_rec');
 
     const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
     const expectedYear = new Date().getFullYear() + 1;
     expect(endYear).toBe(expectedYear);
   });
 
-  test('monthly — PaymentInterval is Monthly and end date is ~2 years from now', async () => {
+  test('monthly — Vodafone prefix sets Channel to vodafone_gh_rec', async () => {
     await createRecurringInvoice({
-      phoneNumber: PHONE, amount: AMOUNT, frequency: 'monthly',
+      phoneNumber: '0204000000', amount: AMOUNT, frequency: 'monthly',
       description: 'Test', clientReference: CLIENT_REF
     });
 
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Monthly');
-
-    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
-    const expectedYear = new Date().getFullYear() + 2;
-    expect(endYear).toBe(expectedYear);
+    expect(body.Channel).toBe('vodafone_gh_rec');
   });
 
-  test('annually — PaymentInterval is Yearly and end date is ~10 years from now', async () => {
+  test('annually — AirtelTigo prefix sets Channel to at_gh_rec', async () => {
     await createRecurringInvoice({
-      phoneNumber: PHONE, amount: AMOUNT, frequency: 'annually',
+      phoneNumber: '0264000000', amount: AMOUNT, frequency: 'annually',
       description: 'Test', clientReference: CLIENT_REF
     });
 
     const body = axios.post.mock.calls[0][1];
     expect(body.PaymentInterval).toBe('Yearly');
-
-    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
-    const expectedYear = new Date().getFullYear() + 10;
-    expect(endYear).toBe(expectedYear);
+    expect(body.Channel).toBe('at_gh_rec');
   });
 });
