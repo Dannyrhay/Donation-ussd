@@ -5,10 +5,11 @@ jest.mock('../../src/config', () => ({
   hubtelRecurring: {
     posSalesId: null,
     baseUrl: 'https://rip.hubtel.com/api/proxy',
-    intervals: { weekly: 'Weekly', monthly: 'Monthly', annually: 'Yearly' }
+    intervals: { weekly: 'WEEKLY', monthly: 'MONTHLY', annually: 'YEARLY' }
   },
   recurringDefaults: { startTime: '10:00', currency: 'GHS', paymentOption: 'MobileMoney' },
-  orgName: 'Test Org'
+  orgName: 'Test Org',
+  recurringCallbackUrl: 'https://webhook.site/test'
 }));
 
 const {
@@ -124,40 +125,42 @@ describe('createRecurringInvoice — outbound request body', () => {
     jest.clearAllMocks();
   });
 
-  test('weekly — PaymentInterval is Weekly, Channel is mtn_gh_rec', async () => {
+  test('weekly — paymentInterval is WEEKLY, channel is mtn_gh_rec', async () => {
     await createRecurringInvoice({
       phoneNumber: PHONE, amount: AMOUNT, frequency: 'weekly',
       description: 'Test', clientReference: CLIENT_REF
     });
 
     const body = axios.post.mock.calls[0][1];
-    expect(body.PaymentInterval).toBe('Weekly');
-    expect(body.Channel).toBe('mtn_gh_rec');
+    expect(body.paymentInterval).toBe('WEEKLY');
+    expect(body.channel).toBe('mtn_gh_rec');
+    expect(body.callbackUrl).toBe('https://webhook.site/test');
 
-    const endYear = parseInt(body.InvoiceEndDate.split('/')[2].split(' ')[0], 10);
+    const endYear = parseInt(body.invoiceEndDate.split('-')[0], 10);
     const expectedYear = new Date().getFullYear() + 1;
     expect(endYear).toBe(expectedYear);
+    expect(body.invoiceEndDate).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
   });
 
-  test('monthly — Vodafone prefix sets Channel to vodafone_gh_rec', async () => {
+  test('monthly — Vodafone prefix sets channel to vodafone_gh_rec', async () => {
     await createRecurringInvoice({
       phoneNumber: '0204000000', amount: AMOUNT, frequency: 'monthly',
       description: 'Test', clientReference: CLIENT_REF
     });
 
     const body = axios.post.mock.calls[0][1];
-    expect(body.PaymentInterval).toBe('Monthly');
-    expect(body.Channel).toBe('vodafone_gh_rec');
+    expect(body.paymentInterval).toBe('MONTHLY');
+    expect(body.channel).toBe('vodafone_gh_rec');
   });
 
-  test('annually — AirtelTigo prefix sets Channel to at_gh_rec', async () => {
+  test('annually — AirtelTigo prefix sets channel to at_gh_rec', async () => {
     await createRecurringInvoice({
       phoneNumber: '0264000000', amount: AMOUNT, frequency: 'annually',
       description: 'Test', clientReference: CLIENT_REF
     });
 
     const body = axios.post.mock.calls[0][1];
-    expect(body.PaymentInterval).toBe('Yearly');
-    expect(body.Channel).toBe('at_gh_rec');
+    expect(body.paymentInterval).toBe('YEARLY');
+    expect(body.channel).toBe('at_gh_rec');
   });
 });

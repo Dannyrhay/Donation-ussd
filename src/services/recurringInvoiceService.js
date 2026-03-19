@@ -91,7 +91,8 @@ function calculateEndDate(frequency) {
       endDate.setFullYear(endDate.getFullYear() + 1);
   }
 
-  return endDate.toISOString().replace('Z', '');
+  // Return YYYY-MM-DDTHH:mm:ss
+  return endDate.toISOString().split('.')[0];
 }
 
 /**
@@ -151,11 +152,10 @@ async function createRecurringInvoice(invoiceData) {
     };
   }
 
-  // Hubtel expects MM/DD/YYYY HH:MM:SS
+  // Hubtel expects YYYY-MM-DDTHH:mm:ss
   const formatHubtelDate = (date) => {
     const d = new Date(date);
-    const pad = (n) => n.toString().padStart(2, '0');
-    return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    return d.toISOString().split('.')[0];
   };
 
   // Hubtel requires OrderDate to be in the future. We'll set it to 10 minutes from now.
@@ -165,19 +165,20 @@ async function createRecurringInvoice(invoiceData) {
   const invoiceEndDate = formatHubtelDate(calculateEndDate(frequency));
 
   const requestBody = {
-    OrderDate: orderDate,
-    InvoiceEndDate: invoiceEndDate,
-    Description: description || `Recurring donation to ${config.orgName}`,
-    StartTime: config.recurringDefaults.startTime,
-    PaymentInterval: paymentInterval,
-    CustomerMobileNumber: formattedPhone,
-    PaymentOption: config.recurringDefaults.paymentOption,
-    Channel: channel,
-    CustomerName: customerName || 'Donor',
-    RecurringAmount: amount,
-    TotalAmount: amount,
-    InitialAmount: amount,
-    Currency: config.recurringDefaults.currency
+    orderDate,
+    invoiceEndDate,
+    description: description || `Recurring donation to ${config.orgName}`,
+    startTime: config.recurringDefaults.startTime,
+    paymentInterval,
+    customerMobileNumber: formattedPhone,
+    paymentOption: config.recurringDefaults.paymentOption,
+    channel,
+    customerName: customerName || 'Donor',
+    recurringAmount: amount,
+    totalAmount: amount,
+    initialAmount: amount,
+    currency: config.recurringDefaults.currency,
+    callbackUrl: config.recurringCallbackUrl
   };
 
 
