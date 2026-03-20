@@ -278,6 +278,18 @@ async function getStats() {
   }
 }
 
+/**
+ * Get donor by phone number
+ */
+async function getDonor(phoneNumber) {
+  try {
+    return Donor.findOne({ phoneNumber });
+  } catch (error) {
+    console.error('Error getting donor:', error);
+    return null;
+  }
+}
+
 module.exports = {
   createDonation,
   createSubscription,
@@ -287,5 +299,6 @@ module.exports = {
   getActiveSubscriptions,
   cancelSubscription,
   getDueSubscriptions,
-  getStats
+  getStats,
+  getDonor
 };

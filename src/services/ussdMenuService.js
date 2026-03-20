@@ -68,8 +68,8 @@ function buildResponse(sessionId, type, message, options = {}) {
  * Build AddToCart response for payment
  * This triggers the mobile money payment prompt
  */
-function buildAddToCartResponse(sessionId, amount, description, clientReference) {
-  return {
+function buildAddToCartResponse(sessionId, amount, description, clientReference, customerName) {
+  const response = {
     SessionId: sessionId,
     Type: ResponseType.ADDTOCART,
     Message: `Thank you for giving to the Lord. Your contribution to JMF is received. God bless you richly.`,
@@ -83,6 +83,12 @@ function buildAddToCartResponse(sessionId, amount, description, clientReference)
       Price: amount
     }
   };
+
+  if (customerName) {
+    response.CustomerName = customerName;
+  }
+
+  return response;
 }
 
 /**
@@ -544,6 +550,17 @@ async function handleConfirmation(sessionId, input, session, mobile) {
       ? `Donation to ${config.orgName}`
       : `${session.frequency} donation to ${config.orgName}`;
 
+    // Get donor name if exists
+    let customerName = 'Donor';
+    try {
+      const donor = await donationService.getDonor(mobile);
+      if (donor && donor.name && donor.name !== 'Donor') {
+        customerName = donor.name;
+      }
+    } catch (err) {
+      console.error('Error fetching donor name:', err.message);
+    }
+
     // Check if this is a recurring donation
     if (isRecurringFrequency(session.frequencyCode)) {
       // Use Hubtel Recurring Invoice API for subscriptions
@@ -555,7 +572,8 @@ async function handleConfirmation(sessionId, input, session, mobile) {
           amount: session.amount,
           frequency: session.frequencyCode,
           description,
-          clientReference
+          clientReference,
+          customerName
         });
 
         if (invoiceResult.success) {
@@ -629,7 +647,7 @@ async function handleConfirmation(sessionId, input, session, mobile) {
     });
 
     // Return AddToCart response to trigger payment prompt
-    return buildAddToCartResponse(sessionId, session.amount, description, clientReference);
+    return buildAddToCartResponse(sessionId, session.amount, description, clientReference, customerName);
   }
 
   if (choice === '2') {

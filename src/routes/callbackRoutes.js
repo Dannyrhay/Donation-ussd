@@ -3,6 +3,13 @@ const router = express.Router();
 const paymentService = require('../services/paymentService');
 const donationService = require('../services/donationService');
 const recurringInvoiceService = require('../services/recurringInvoiceService');
+const { adminAuth, callbackAuth } = require('../middleware/auth');
+const { validateBody } = require('../middleware/validation');
+const { 
+  paymentCallbackSchema, 
+  recurringCallbackSchema, 
+  fulfilmentCallbackSchema
+} = require('../utils/validation');
 
 /**
  * Callback Routes
@@ -15,7 +22,7 @@ const recurringInvoiceService = require('../services/recurringInvoiceService');
  * POST /api/callback/payment
  * Receives payment status callbacks from Hubtel (one-time payments)
  */
-router.post('/payment', async (req, res) => {
+router.post('/payment', callbackAuth, validateBody(paymentCallbackSchema), async (req, res) => {
   console.log('='.repeat(50));
   console.log('PAYMENT CALLBACK RECEIVED');
   console.log('='.repeat(50));
@@ -57,7 +64,7 @@ router.post('/payment', async (req, res) => {
  * - Each recurring payment
  * - Invoice cancellation
  */
-router.post('/recurring', async (req, res) => {
+router.post('/recurring', callbackAuth, validateBody(recurringCallbackSchema), async (req, res) => {
   console.log('='.repeat(50));
   console.log('RECURRING INVOICE CALLBACK RECEIVED');
   console.log('='.repeat(50));
@@ -147,7 +154,7 @@ router.post('/recurring', async (req, res) => {
  * IMPORTANT: Must ALWAYS return HTTP 200 with TXN_SUCCESS.
  * Returning an error status risks Hubtel reversing the payment.
  */
-router.post('/fulfilment', async (req, res) => {
+router.post('/fulfilment', callbackAuth, validateBody(fulfilmentCallbackSchema), async (req, res) => {
   console.log('='.repeat(50));
   console.log('FULFILMENT CALLBACK RECEIVED');
   console.log('='.repeat(50));
@@ -171,7 +178,7 @@ router.post('/fulfilment', async (req, res) => {
  * GET /api/callback/payments
  * List all payments/donations
  */
-router.get('/payments', async (req, res) => {
+router.get('/payments', adminAuth, async (req, res) => {
   try {
     const { status, phone, limit } = req.query;
 
@@ -200,7 +207,7 @@ router.get('/payments', async (req, res) => {
  * GET /api/callback/payment/:reference
  * Get specific payment by reference
  */
-router.get('/payment/:reference', async (req, res) => {
+router.get('/payment/:reference', adminAuth, async (req, res) => {
   try {
     const payment = await paymentService.getPayment(req.params.reference);
 
@@ -229,7 +236,7 @@ router.get('/payment/:reference', async (req, res) => {
  * GET /api/callback/stats
  * Get donation statistics
  */
-router.get('/stats', async (req, res) => {
+router.get('/stats', adminAuth, async (req, res) => {
   try {
     const stats = await paymentService.getStats();
 
@@ -258,7 +265,7 @@ router.get('/stats', async (req, res) => {
  * GET /api/callback/subscriptions
  * Get all active subscriptions
  */
-router.get('/subscriptions', async (req, res) => {
+router.get('/subscriptions', adminAuth, async (req, res) => {
   try {
     const { Subscription } = require('../models');
     const subscriptions = await Subscription.find()
@@ -284,7 +291,7 @@ router.get('/subscriptions', async (req, res) => {
  * POST /api/callback/subscriptions/:id/cancel
  * Cancel a subscription
  */
-router.post('/subscriptions/:id/cancel', async (req, res) => {
+router.post('/subscriptions/:id/cancel', adminAuth, async (req, res) => {
   try {
     const { reason } = req.body;
     const result = await donationService.cancelSubscription(
@@ -318,7 +325,7 @@ router.post('/subscriptions/:id/cancel', async (req, res) => {
  * GET /api/callback/donors
  * Get all donors
  */
-router.get('/donors', async (req, res) => {
+router.get('/donors', adminAuth, async (req, res) => {
   try {
     const { Donor } = require('../models');
     const donors = await Donor.find()

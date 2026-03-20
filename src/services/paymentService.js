@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../config');
+const { sanitize } = require('../utils/logger');
 const donationService = require('./donationService');
 
 /**
@@ -55,7 +56,8 @@ async function initiatePayment(paymentData) {
     channel,
     description,
     sessionId,
-    frequency
+    frequency,
+    customerName
   } = paymentData;
 
   const formattedPhone = formatPhoneNumber(phoneNumber);
@@ -116,7 +118,7 @@ async function initiatePayment(paymentData) {
   // Real Hubtel API call
   try {
     const requestBody = {
-      CustomerName: 'Donor',
+      CustomerName: customerName || 'Donor',
       CustomerMsisdn: formattedPhone,
       CustomerEmail: '',
       Channel: channel,
@@ -133,7 +135,7 @@ async function initiatePayment(paymentData) {
       requestBody.FulfilmentCallbackUrl = config.fulfilmentCallbackUrl;
     }
 
-    console.log('Hubtel Payment Request:', JSON.stringify(requestBody, null, 2));
+    console.log('Hubtel Payment Request:', JSON.stringify(sanitize(requestBody), null, 2));
 
     const response = await axios.post(
       `${config.hubtel.baseUrl}/merchants/${config.hubtel.merchantId}/receive/mobilemoney`,
@@ -200,7 +202,7 @@ async function handlePaymentCallback(callbackData) {
   console.log('='.repeat(50));
   console.log('HUBTEL PAYMENT CALLBACK RECEIVED:');
   console.log('Timestamp:', new Date().toISOString());
-  console.log('Raw Data:', JSON.stringify(callbackData, null, 2));
+  console.log('Raw Data:', JSON.stringify(sanitize(callbackData), null, 2));
   console.log('='.repeat(50));
 
   // Hubtel payment callback format:
@@ -211,6 +213,22 @@ async function handlePaymentCallback(callbackData) {
   const sessionId = callbackData.SessionId;
   const orderId = callbackData.OrderId;
   const customerPhone = callbackData.OrderInfo?.CustomerMobileNumber;
+  const customerName = callbackData.OrderInfo?.CustomerName;
+
+  // Update donor name if we have a real one and it's currently 'Donor' or empty
+  if (customerName && customerName !== 'Donor' && customerPhone) {
+    try {
+      const Donor = mongoose.model('Donor');
+      const donor = await Donor.findOne({ phoneNumber: formatPhoneNumber(customerPhone) });
+      if (donor && (!donor.name || donor.name === 'Donor')) {
+        donor.name = customerName;
+        await donor.save();
+        console.log(`Updated donor name for ${customerPhone} to ${customerName}`);
+      }
+    } catch (err) {
+      console.error('Failed to update donor name from callback:', err.message);
+    }
+  }
 
   // Determine if payment was successful
   // OrderInfo.Payment.IsSuccessful is the definitive flag in the new callback format
@@ -362,7 +380,7 @@ async function handleFulfilmentCallback(callbackData) {
   console.log('='.repeat(50));
   console.log('HUBTEL FULFILMENT CALLBACK RECEIVED');
   console.log('Timestamp:', new Date().toISOString());
-  console.log('Raw Data:', JSON.stringify(callbackData, null, 2));
+  console.log('Raw Data:', JSON.stringify(sanitize(callbackData), null, 2));
   console.log('='.repeat(50));
 
   const FULFILMENT_RESPONSE = {

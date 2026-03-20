@@ -1,79 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 const schedulerService = require('../services/schedulerService');
 const subscriptionProcessor = require('../services/subscriptionProcessor');
 const { Subscription, Donation, Donor } = require('../models');
+const { adminAuth } = require('../middleware/auth');
 
 /**
  * Admin Routes
  *
  * Protected endpoints for managing subscriptions and the scheduler.
- * All routes require admin API key authentication.
- *
- * Security measures:
- * - API key authentication
- * - Rate limiting (applied in app.js)
- * - Input validation
- * - Audit logging
  */
-
-/**
- * Admin authentication middleware
- * Requires ADMIN_API_KEY environment variable
- */
-function adminAuth(req, res, next) {
-  const apiKey = req.headers['x-admin-key'] || req.query.adminKey;
-  const validKey = process.env.ADMIN_API_KEY;
-
-  // If no admin key is configured, deny all admin requests
-  if (!validKey) {
-    console.warn('[ADMIN] Request denied: ADMIN_API_KEY not configured');
-    return res.status(503).json({
-      success: false,
-      error: 'Admin access not configured'
-    });
-  }
-
-  // Constant-time comparison to prevent timing attacks
-  if (!apiKey || !timingSafeEqual(apiKey, validKey)) {
-    console.warn('[ADMIN] Request denied: Invalid API key');
-    return res.status(401).json({
-      success: false,
-      error: 'Unauthorized'
-    });
-  }
-
-  // Log admin action
-  console.log(`[ADMIN] Authenticated request: ${req.method} ${req.path}`);
-
-  next();
-}
-
-/**
- * Timing-safe string comparison
- */
-function timingSafeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') {
-    return false;
-  }
-
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-/**
- * Validate MongoDB ObjectId
- */
-function isValidObjectId(id) {
-  return /^[a-fA-F0-9]{24}$/.test(id);
-}
 
 // Apply admin auth to all routes
 router.use(adminAuth);

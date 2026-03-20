@@ -1,8 +1,15 @@
 const express = require('express');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const { connectDatabase } = require('./config/database');
+const { sanitize } = require('./utils/logger');
+const { auditLog } = require('./middleware/auth');
+const { 
+  generalLimiter, 
+  ussdLimiter, 
+  adminLimiter, 
+  callbackLimiter 
+} = require('./middleware/rateLimiter');
 const ussdRoutes = require('./routes/ussdRoutes');
 const callbackRoutes = require('./routes/callbackRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -23,53 +30,8 @@ app.use(helmet({
 // Trust proxy (for Render.com and other PaaS)
 app.set('trust proxy', 1);
 
-// Rate limiting - General API
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per window
-  message: {
-    success: false,
-    error: 'Too many requests, please try again later'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
-});
-
-// Rate limiting - USSD endpoints (higher limit for Hubtel)
-const ussdLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 60, // 60 requests per minute
-  message: {
-    success: false,
-    error: 'Too many USSD requests'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
-});
-
-// Rate limiting - Admin endpoints (stricter)
-const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // 50 requests per window
-  message: {
-    success: false,
-    error: 'Too many admin requests'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
-});
-
-// Rate limiting - Callback endpoints (higher for Hubtel webhooks)
-const callbackLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute
-  message: {
-    success: false,
-    error: 'Too many callback requests'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+// Rate limiting - Global
+app.use(generalLimiter);
 
 /**
  * Body Parsing Middleware
@@ -88,15 +50,10 @@ app.use((req, res, next) => {
 
   console.log(`[${timestamp}] ${method} ${path} - IP: ${ip}`);
 
-  // Log body for non-sensitive endpoints (avoid logging sensitive data)
+  // Log body with sanitization
   if (req.body && Object.keys(req.body).length > 0) {
-    // Don't log admin API keys or sensitive callback data
-    const safeBody = { ...req.body };
-    if (safeBody.adminKey) safeBody.adminKey = '[REDACTED]';
-    if (safeBody.apiKey) safeBody.apiKey = '[REDACTED]';
-    if (safeBody.apiSecret) safeBody.apiSecret = '[REDACTED]';
-
-    console.log('Body:', JSON.stringify(safeBody, null, 2));
+    const sanitizedBody = sanitize(req.body);
+    console.log('Body:', JSON.stringify(sanitizedBody, null, 2));
   }
 
   next();
@@ -133,14 +90,11 @@ app.get('/', (req, res) => {
 });
 
 /**
- * Routes with Rate Limiting
+ * Routes with Specialized Rate Limiting
  */
 app.use('/api/ussd', ussdLimiter, ussdRoutes);
 app.use('/api/callback', callbackLimiter, callbackRoutes);
-app.use('/api/admin', adminLimiter, adminRoutes);
-
-// Apply general limiter to any other routes
-app.use(generalLimiter);
+app.use('/api/admin', adminLimiter, auditLog, adminRoutes);
 
 /**
  * 404 Handler

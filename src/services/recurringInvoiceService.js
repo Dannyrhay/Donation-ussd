@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../config');
+const { sanitize } = require('../utils/logger');
 
 /**
  * Hubtel Recurring Invoice Service
@@ -190,7 +191,7 @@ async function createRecurringInvoice(invoiceData) {
   console.log('='.repeat(50));
   console.log('CREATING HUBTEL RECURRING INVOICE');
   console.log('URL:', fullUrl);
-  console.log('Request Body:', JSON.stringify(requestBody, null, 2));
+  console.log('Request Body:', JSON.stringify(sanitize(requestBody), null, 2));
   console.log('='.repeat(50));
 
 
@@ -386,7 +387,7 @@ function handleRecurringCallback(callbackData) {
   console.log('='.repeat(50));
   console.log('HUBTEL RECURRING CALLBACK RECEIVED');
   console.log('Timestamp:', new Date().toISOString());
-  console.log('Data:', JSON.stringify(callbackData, null, 2));
+  console.log('Data:', JSON.stringify(sanitize(callbackData), null, 2));
   console.log('='.repeat(50));
 
   const responseCode = callbackData.ResponseCode;
