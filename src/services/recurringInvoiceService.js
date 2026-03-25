@@ -41,31 +41,44 @@ function formatPhoneNumber(phone) {
 }
 
 /**
- * Detect mobile network from phone number
- * Returns Hubtel channel code with _rec suffix for recurring invoices
- * MTN: 024, 054, 055, 059, 025 -> mtn_gh_rec
- * Vodafone/Telecel: 020, 050 -> vodafone_gh_rec
- * AirtelTigo: 026, 056, 027, 057 -> at_gh_rec
+ * Detect mobile network from phone number.
+ * Returns Hubtel recurring channel code for MTN/Vodafone,
+ * or 'at_gh' (sentinel) for AirtelTigo (not supported for recurring invoices).
+ *
+ * MTN Ghana:        024, 025, 053, 054, 055, 059  -> mtn_gh_rec
+ * Vodafone/Telecel: 020, 050                      -> vodafone_gh_rec
+ * AirtelTigo:       026, 027, 056, 057            -> at_gh (recurring NOT supported)
  */
 function detectNetwork(phoneNumber) {
   const cleaned = formatPhoneNumber(phoneNumber);
-  // Get the 2-digit prefix after 233 (country code)
-  const prefix = cleaned.substring(3, 5);
+  // E.164 format: 233XXXXXXXXX — strip country code to get local number, then take first 3 digits
+  // e.g. 233244123456 -> local '0244123456' -> prefix '024'
+  const localNumber = '0' + cleaned.substring(3);
+  const prefix = localNumber.substring(0, 3);
 
-  const mtnPrefixes = ['24', '54', '55', '59', '25'];
-  const vodafonePrefixes = ['20', '50'];
-  const airtelTigoPrefixes = ['26', '56', '27', '57'];
+  const mtnPrefixes = ['024', '025', '053', '054', '055', '059'];
+  const vodafonePrefixes = ['020', '050'];
+  const airtelTigoPrefixes = ['026', '027', '056', '057'];
 
   if (mtnPrefixes.includes(prefix)) {
     return 'mtn_gh_rec';
   } else if (vodafonePrefixes.includes(prefix)) {
     return 'vodafone_gh_rec';
   } else if (airtelTigoPrefixes.includes(prefix)) {
-    return 'at_gh_rec';
+    // AirtelTigo is not supported by Hubtel for recurring invoices
+    return 'at_gh';
   }
 
-  // Default to MTN if unknown
+  // Default to MTN if prefix is unrecognised
   return 'mtn_gh_rec';
+}
+
+/**
+ * Returns true if the phone number belongs to AirtelTigo,
+ * which does not support Hubtel recurring invoices.
+ */
+function isAirtelTigo(phoneNumber) {
+  return detectNetwork(phoneNumber) === 'at_gh';
 }
 
 
@@ -120,6 +133,13 @@ async function createRecurringInvoice(invoiceData) {
   const formattedPhone = formatPhoneNumber(phoneNumber);
   const channel = detectNetwork(phoneNumber);
   const paymentInterval = config.hubtelRecurring.intervals[frequency];
+
+  if (channel === 'at_gh') {
+    return {
+      success: false,
+      error: 'AirtelTigo numbers are not supported for recurring invoices. Use one-time payment instead.'
+    };
+  }
 
   if (!paymentInterval) {
     return {
@@ -435,5 +455,6 @@ module.exports = {
   cancelRecurringInvoice,
   handleRecurringCallback,
   formatPhoneNumber,
-  detectNetwork
+  detectNetwork,
+  isAirtelTigo
 };

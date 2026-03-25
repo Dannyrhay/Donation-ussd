@@ -563,6 +563,18 @@ async function handleConfirmation(sessionId, input, session, mobile) {
 
     // Check if this is a recurring donation
     if (isRecurringFrequency(session.frequencyCode)) {
+      // AirtelTigo is not supported by Hubtel for recurring invoices — inform user
+      if (recurringInvoiceService.isAirtelTigo(mobile)) {
+        console.log('AirtelTigo number detected — recurring not supported, notifying user');
+        clearSession(sessionId);
+        return buildResponse(sessionId, ResponseType.RELEASE,
+          'Sorry, recurring donations are not available for AirtelTigo numbers. Please dial again and select One-time payment.', {
+            label: 'Not Supported',
+            clientState: 'error',
+            dataType: 'display'
+          });
+      }
+
       // Use Hubtel Recurring Invoice API for subscriptions
       console.log('Creating recurring invoice for:', session.frequencyCode);
 

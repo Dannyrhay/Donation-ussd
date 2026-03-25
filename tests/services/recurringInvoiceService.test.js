@@ -153,14 +153,24 @@ describe('createRecurringInvoice — outbound request body', () => {
     expect(body.channel).toBe('vodafone_gh_rec');
   });
 
-  test('annually — AirtelTigo prefix sets channel to at_gh_rec', async () => {
-    await createRecurringInvoice({
+  test('AirtelTigo prefix — returns error without calling Hubtel API', async () => {
+    const result = await createRecurringInvoice({
       phoneNumber: '0264000000', amount: AMOUNT, frequency: 'annually',
       description: 'Test', clientReference: CLIENT_REF
     });
 
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/AirtelTigo/);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('MTN 053 prefix sets channel to mtn_gh_rec', async () => {
+    await createRecurringInvoice({
+      phoneNumber: '0534000000', amount: AMOUNT, frequency: 'weekly',
+      description: 'Test', clientReference: CLIENT_REF
+    });
+
     const body = axios.post.mock.calls[0][1];
-    expect(body.paymentInterval).toBe('YEARLY');
-    expect(body.channel).toBe('at_gh_rec');
+    expect(body.channel).toBe('mtn_gh_rec');
   });
 });
