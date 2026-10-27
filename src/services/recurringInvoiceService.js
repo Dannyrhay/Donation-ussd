@@ -308,7 +308,8 @@ async function verifyRecurringInvoice(verifyData) {
           'Authorization': getAuthHeader(),
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
 

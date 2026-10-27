@@ -30,8 +30,8 @@ app.use(helmet({
 // Trust proxy (for Render.com and other PaaS)
 app.set('trust proxy', 1);
 
-// Rate limiting - Global
-app.use(generalLimiter);
+// NOTE: No global rate limiter here. Hubtel sends every customer's USSD
+// traffic from the same few IPs, so a global per-IP limit blocks everyone.
 
 /**
  * Body Parsing Middleware
@@ -95,6 +95,9 @@ app.get('/', (req, res) => {
 app.use('/api/ussd', ussdLimiter, ussdRoutes);
 app.use('/api/callback', callbackLimiter, callbackRoutes);
 app.use('/api/admin', adminLimiter, auditLog, adminRoutes);
+
+// General limiter only for unmatched routes (scanners / 404 noise)
+app.use(generalLimiter);
 
 /**
  * 404 Handler

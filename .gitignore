@@ -20,3 +20,6 @@ Thumbs.db
 # Build
 dist/
 build/
+
+# Graft cache (regenerable)
+graft/

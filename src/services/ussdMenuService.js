@@ -196,7 +196,9 @@ setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
  * Process USSD request and return appropriate response
  */
 async function processRequest(ussdRequest) {
-  const { SessionId, Type, Message, Mobile, Sequence } = ussdRequest;
+  const { SessionId, Type, Mobile, Sequence } = ussdRequest;
+  // Hubtel may omit Message or send a number; handlers call .trim() on it
+  const Message = ussdRequest.Message == null ? '' : String(ussdRequest.Message);
 
   // Get current session
   const session = getSession(SessionId);

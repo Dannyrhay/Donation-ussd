@@ -87,6 +87,12 @@ router.post('/recurring', callbackAuth, validateBody(recurringCallbackSchema), a
     }
 
     if (subscription) {
+      // TODO(idempotency): Hubtel retries callbacks. A repeat for the same
+      // result.transactionId currently re-runs recordPayment() (double-counts
+      // totals), then Donation.create() hits the unique `reference` index → 500
+      // → Hubtel retries again. Detect an already-processed transaction here and
+      // acknowledge with 200 without re-recording.
+
       if (result.success) {
         // Payment successful
         await subscription.recordPayment(result.amount || subscription.amount);

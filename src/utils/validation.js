@@ -56,7 +56,8 @@ const validate = (schema, data) => {
     if (error instanceof z.ZodError) {
       return { 
         success: false, 
-        error: error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ') 
+        // Zod v4 exposes .issues (.errors was removed — it threw a TypeError → 500)
+        error: error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ') 
       };
     }
     return { success: false, error: error.message };

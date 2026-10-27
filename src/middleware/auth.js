@@ -31,7 +31,16 @@ const adminAuth = (req, res, next) => {
   const bearerToken = authHeader && authHeader.split(' ')[1];
   const apiKey = req.headers['x-admin-key'] || req.query.adminKey || bearerToken;
 
-  const validKey = process.env.ADMIN_TOKEN || process.env.ADMIN_API_KEY || 'admin_secret_token_123';
+  const validKey = process.env.ADMIN_TOKEN || process.env.ADMIN_API_KEY;
+
+  // Fail closed: never fall back to a hardcoded key
+  if (!validKey) {
+    console.error('[AUTH] ADMIN_TOKEN / ADMIN_API_KEY not set — admin endpoints disabled');
+    return res.status(503).json({
+      success: false,
+      error: 'Admin access not configured'
+    });
+  }
 
   if (!apiKey || !timingSafeEqual(apiKey, validKey)) {
     console.warn(`[AUTH] Unauthorized admin access attempt from IP: ${req.ip}`);

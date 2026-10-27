@@ -170,9 +170,19 @@ describe('POST /api/callback/recurring', () => {
 
     const res = await request(app)
       .post(RECURRING_URL)
-      .send({ ResponseCode: '0000', Data: {} });
+      .send({ ResponseCode: '0000', Data: { RecurringInvoiceId: 'INV-001' } });
 
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
+  });
+
+  test('invalid payload — returns 400 with validation details (not a crash)', async () => {
+    const res = await request(app)
+      .post(RECURRING_URL)
+      .send({ ResponseCode: '0000', Data: {} });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid request data');
+    expect(res.body.details).toContain('Data.RecurringInvoiceId');
   });
 });

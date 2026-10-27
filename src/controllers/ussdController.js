@@ -59,11 +59,15 @@ async function handleUssdRequest(req, res) {
   } catch (error) {
     console.error('USSD Error:', error);
 
-    // Send error response
+    // Send error response — must be a full, valid Hubtel payload ('Release',
+    // capitalised) or Hubtel shows the customer "Error:UUE"
     res.json({
-      SessionId: req.body.SessionId,
-      Type: 'release',
+      SessionId: req.body && req.body.SessionId,
+      Type: 'Release',
       Message: 'An error occurred. Please try again later.',
+      Label: 'Error',
+      DataType: 'display',
+      FieldType: 'text',
       ClientState: 'error'
     });
   }

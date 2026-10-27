@@ -144,7 +144,8 @@ async function initiatePayment(paymentData) {
         headers: {
           'Authorization': getAuthHeader(),
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
 
