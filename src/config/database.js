@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 
+// When the DB is unreachable, mongoose queues queries for 10s by default. That
+// stalls USSD replies past Hubtel's timeout ("Error:UUE"). Fail fast instead —
+// USSD code paths already catch DB errors and show a message.
+mongoose.set('bufferTimeoutMS', 3000);
+
 /**
  * Database Connection Module
  *

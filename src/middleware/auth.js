@@ -19,17 +19,28 @@ function timingSafeEqual(a, b) {
 }
 
 /**
+ * Log a warning only once per process (avoids flooding logs on every request)
+ */
+const warnedOnce = new Set();
+function warnOnce(key, message) {
+  if (warnedOnce.has(key)) return;
+  warnedOnce.add(key);
+  console.warn(message);
+}
+
+/**
  * Admin Authentication Middleware
- * 
+ *
  * Protects administrative endpoints using:
  * 1. Authorization: Bearer <token>
  * 2. X-Admin-Key header
- * 3. adminKey query parameter
+ *
+ * Query-string keys (?adminKey=) are NOT accepted — URLs end up in proxy and access logs.
  */
 const adminAuth = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const bearerToken = authHeader && authHeader.split(' ')[1];
-  const apiKey = req.headers['x-admin-key'] || req.query.adminKey || bearerToken;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+  const apiKey = req.headers['x-admin-key'] || bearerToken;
 
   const validKey = process.env.ADMIN_TOKEN || process.env.ADMIN_API_KEY;
 
@@ -61,7 +72,7 @@ const callbackAuth = (req, res, next) => {
   const expectedSecret = process.env.CALLBACK_SECRET;
 
   if (!expectedSecret) {
-    console.warn('WARNING: CALLBACK_SECRET not set. Callback endpoints are currently insecure.');
+    warnOnce('callback', 'WARNING: CALLBACK_SECRET not set. Callback endpoints are currently insecure.');
     return next();
   }
 
@@ -70,6 +81,36 @@ const callbackAuth = (req, res, next) => {
     return res.status(401).json({
       success: false,
       message: 'Unauthorized callback connection'
+    });
+  }
+
+  next();
+};
+
+/**
+ * Hubtel USSD Authentication Middleware
+ *
+ * Without this, anyone can POST to /api/ussd with any Mobile and act as that
+ * customer (e.g. cancel their subscription). Enable by setting USSD_SECRET and
+ * configuring the Hubtel Service Interaction URL as /api/ussd?secret=<USSD_SECRET>.
+ * Must run BEFORE ussdLimiter so spoofed traffic can't burn a real customer's quota.
+ */
+const ussdAuth = (req, res, next) => {
+  // Only the POST endpoint drives sessions; GET is a harmless info page
+  if (req.method !== 'POST') return next();
+
+  const expectedSecret = process.env.USSD_SECRET;
+
+  if (!expectedSecret) {
+    warnOnce('ussd', 'WARNING: USSD_SECRET not set. /api/ussd accepts requests from anyone.');
+    return next();
+  }
+
+  if (!timingSafeEqual(req.query.secret, expectedSecret)) {
+    console.error(`[AUTH] Unauthorized USSD request from IP: ${req.ip}`);
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized'
     });
   }
 
@@ -88,5 +129,6 @@ const auditLog = (req, res, next) => {
 module.exports = {
   adminAuth,
   callbackAuth,
+  ussdAuth,
   auditLog
 };

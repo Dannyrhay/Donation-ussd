@@ -4,6 +4,7 @@ const schedulerService = require('../services/schedulerService');
 const subscriptionProcessor = require('../services/subscriptionProcessor');
 const { Subscription, Donation, Donor } = require('../models');
 const { adminAuth } = require('../middleware/auth');
+const { parsePagination, escapeRegex } = require('../utils/pagination');
 
 /**
  * Admin Routes
@@ -68,16 +69,17 @@ router.post('/scheduler/trigger', async (req, res) => {
  */
 router.get('/subscriptions', async (req, res) => {
   try {
-    const { status, phone, limit = 100, skip = 0 } = req.query;
+    const { status, phone } = req.query;
+    const { limit, skip } = parsePagination(req.query);
 
     const query = {};
     if (status) query.status = status;
-    if (phone) query.phoneNumber = { $regex: phone };
+    if (phone) query.phoneNumber = { $regex: escapeRegex(phone) };
 
     const subscriptions = await Subscription.find(query)
       .sort({ createdAt: -1 })
-      .skip(parseInt(skip))
-      .limit(parseInt(limit))
+      .skip(skip)
+      .limit(limit)
       .populate('donor');
 
     const total = await Subscription.countDocuments(query);
@@ -352,17 +354,18 @@ router.post('/subscriptions/:id/cancel', async (req, res) => {
  */
 router.get('/donations', async (req, res) => {
   try {
-    const { status, phone, subscriptionId, limit = 100, skip = 0 } = req.query;
+    const { status, phone, subscriptionId } = req.query;
+    const { limit, skip } = parsePagination(req.query);
 
     const query = {};
     if (status) query.status = status;
-    if (phone) query.phoneNumber = { $regex: phone };
+    if (phone) query.phoneNumber = { $regex: escapeRegex(phone) };
     if (subscriptionId) query.subscription = subscriptionId;
 
     const donations = await Donation.find(query)
       .sort({ createdAt: -1 })
-      .skip(parseInt(skip))
-      .limit(parseInt(limit))
+      .skip(skip)
+      .limit(limit)
       .populate('donor')
       .populate('subscription');
 
@@ -389,15 +392,16 @@ router.get('/donations', async (req, res) => {
  */
 router.get('/donors', async (req, res) => {
   try {
-    const { limit = 100, skip = 0, sortBy = 'totalDonated' } = req.query;
+    const { sortBy = 'totalDonated' } = req.query;
+    const { limit, skip } = parsePagination(req.query);
 
     const sortOptions = {};
     sortOptions[sortBy] = -1;
 
     const donors = await Donor.find()
       .sort(sortOptions)
-      .skip(parseInt(skip))
-      .limit(parseInt(limit));
+      .skip(skip)
+      .limit(limit);
 
     const total = await Donor.countDocuments();
 

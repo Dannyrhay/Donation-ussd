@@ -5,6 +5,7 @@ const donationService = require('../services/donationService');
 const recurringInvoiceService = require('../services/recurringInvoiceService');
 const { adminAuth, callbackAuth } = require('../middleware/auth');
 const { validateBody } = require('../middleware/validation');
+const { parsePagination } = require('../utils/pagination');
 const { 
   paymentCallbackSchema, 
   recurringCallbackSchema, 
@@ -87,30 +88,59 @@ router.post('/recurring', callbackAuth, validateBody(recurringCallbackSchema), a
     }
 
     if (subscription) {
-      // TODO(idempotency): Hubtel retries callbacks. A repeat for the same
-      // result.transactionId currently re-runs recordPayment() (double-counts
-      // totals), then Donation.create() hits the unique `reference` index → 500
-      // → Hubtel retries again. Detect an already-processed transaction here and
-      // acknowledge with 200 without re-recording.
-
       if (result.success) {
         // Payment successful
-        await subscription.recordPayment(result.amount || subscription.amount);
+        //
+        // Idempotency: Hubtel retries callbacks. The Donation is inserted FIRST and
+        // its unique `reference` (REC-<transactionId>) is the atomic guard — a
+        // duplicate insert (E11000) means this transaction was already recorded,
+        // so we acknowledge without calling recordPayment() again. Safe under
+        // concurrent retries, unlike a check-then-insert.
+        if (!result.transactionId) {
+          console.warn(`Recurring callback without TransactionId for subscription ${subscription._id} — cannot deduplicate`);
+        }
 
-        // Record donation
-        await Donation.create({
-          donor: subscription.donor,
-          phoneNumber: subscription.phoneNumber,
-          amount: result.amount || subscription.amount,
-          channel: subscription.channel,
-          frequency: subscription.frequency,
-          subscription: subscription._id,
-          reference: `REC-${result.transactionId || Date.now()}`,
-          status: 'Success',
-          description: `Recurring ${subscription.frequency} donation`,
-          source: 'hubtel_recurring',
-          hubtelTransactionId: result.transactionId
-        });
+        const amount = result.amount || subscription.amount;
+        const reference = `REC-${result.transactionId || Date.now()}`;
+
+        let donation;
+        try {
+          donation = await Donation.create({
+            donor: subscription.donor,
+            phoneNumber: subscription.phoneNumber,
+            amount,
+            channel: subscription.channel,
+            frequency: subscription.frequency,
+            subscription: subscription._id,
+            reference,
+            status: 'Success',
+            description: `Recurring ${subscription.frequency} donation`,
+            source: 'hubtel_recurring',
+            hubtelTransactionId: result.transactionId
+          });
+        } catch (err) {
+          if (err && err.code === 11000) {
+            console.log(`Duplicate recurring callback for ${reference} — already recorded, acknowledging`);
+            return res.json({
+              success: true,
+              message: 'Recurring callback already processed',
+              subscriptionId: subscription._id.toString(),
+              status: subscription.status
+            });
+          }
+          throw err;
+        }
+
+        try {
+          await subscription.recordPayment(amount);
+        } catch (err) {
+          // Roll back so Hubtel's retry is processed fresh instead of being
+          // mistaken for a duplicate (which would leave totals un-updated)
+          await Donation.deleteOne({ _id: donation._id }).catch((delErr) => {
+            console.error(`Rollback failed for donation ${reference}:`, delErr);
+          });
+          throw err;
+        }
 
         console.log(`Recurring payment recorded for subscription ${subscription._id}`);
 
@@ -186,12 +216,13 @@ router.post('/fulfilment', callbackAuth, validateBody(fulfilmentCallbackSchema),
  */
 router.get('/payments', adminAuth, async (req, res) => {
   try {
-    const { status, phone, limit } = req.query;
+    const { status, phone } = req.query;
+    const { limit } = parsePagination(req.query);
 
     const payments = await paymentService.getAllPayments({
       status,
       phoneNumber: phone,
-      limit: parseInt(limit) || 100
+      limit
     });
 
     res.json({
@@ -274,12 +305,21 @@ router.get('/stats', adminAuth, async (req, res) => {
 router.get('/subscriptions', adminAuth, async (req, res) => {
   try {
     const { Subscription } = require('../models');
-    const subscriptions = await Subscription.find()
-      .sort({ createdAt: -1 })
-      .populate('donor');
+    const { limit, skip } = parsePagination(req.query);
+
+    const [subscriptions, total] = await Promise.all([
+      Subscription.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('donor')
+        .lean(),
+      Subscription.countDocuments()
+    ]);
 
     res.json({
       success: true,
+      total,
       count: subscriptions.length,
       subscriptions
     });
@@ -334,11 +374,20 @@ router.post('/subscriptions/:id/cancel', adminAuth, async (req, res) => {
 router.get('/donors', adminAuth, async (req, res) => {
   try {
     const { Donor } = require('../models');
-    const donors = await Donor.find()
-      .sort({ totalDonated: -1 });
+    const { limit, skip } = parsePagination(req.query);
+
+    const [donors, total] = await Promise.all([
+      Donor.find()
+        .sort({ totalDonated: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Donor.countDocuments()
+    ]);
 
     res.json({
       success: true,
+      total,
       count: donors.length,
       donors
     });

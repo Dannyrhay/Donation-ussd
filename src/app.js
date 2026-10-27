@@ -3,7 +3,7 @@ const helmet = require('helmet');
 const config = require('./config');
 const { connectDatabase } = require('./config/database');
 const { sanitize } = require('./utils/logger');
-const { auditLog } = require('./middleware/auth');
+const { auditLog, ussdAuth } = require('./middleware/auth');
 const { 
   generalLimiter, 
   ussdLimiter, 
@@ -92,7 +92,8 @@ app.get('/', (req, res) => {
 /**
  * Routes with Specialized Rate Limiting
  */
-app.use('/api/ussd', ussdLimiter, ussdRoutes);
+// ussdAuth runs before the limiter so spoofed requests can't exhaust a real customer's quota
+app.use('/api/ussd', ussdAuth, ussdLimiter, ussdRoutes);
 app.use('/api/callback', callbackLimiter, callbackRoutes);
 app.use('/api/admin', adminLimiter, auditLog, adminRoutes);
 

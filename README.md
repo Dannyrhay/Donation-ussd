@@ -292,11 +292,20 @@ SCHEDULER_CRON=0 6 * * *        # Cron expression (6 AM daily)
 
 - **Helmet**: Security HTTP headers
 - **Rate Limiting**:
-  - USSD: 60 requests/minute
-  - Callbacks: 100 requests/minute
+  - USSD: 30 requests/minute **per subscriber (Mobile)** — never per IP, because Hubtel relays every customer from the same gateway IPs. Limited requests get a valid `Release` USSD reply, not a 429.
+  - Hubtel webhooks (`/payment`, `/recurring`, `/fulfilment`): not rate limited (authenticated by `CALLBACK_SECRET`)
+  - Admin views under `/api/callback`: 200 requests/minute
   - Admin: 50 requests/15 minutes
-- **Admin Authentication**: API key required for admin endpoints
+  - Unmatched routes: 100 requests/15 minutes per IP
+- **Admin Authentication**: `X-Admin-Key` or `Authorization: Bearer` header required (query-string keys are rejected). Admin endpoints are disabled if no key is configured.
+- **USSD Authentication** (optional): set `USSD_SECRET` and use `/api/ussd?secret=<USSD_SECRET>` as the Hubtel Service Interaction URL
 - **Sensitive Data Redaction**: Logs sanitize sensitive fields
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push and pull request to `main`: syntax check, tests on Node 22 and 24, and `npm audit` of production dependencies. No secrets are needed.
+
+Railway deploys automatically on push. Enable **Wait for CI** in the Railway service settings so a commit only deploys after CI passes.
 
 ## Deployment
 
@@ -321,7 +330,9 @@ SCHEDULER_CRON=0 6 * * *        # Cron expression (6 AM daily)
 | `ORG_NAME` | Organization name |
 | `SCHEDULER_ENABLED` | `true` to enable scheduler |
 | `SCHEDULER_CRON` | Cron schedule (default: `0 6 * * *`) |
-| `ADMIN_API_KEY` | Secure key for admin endpoints |
+| `ADMIN_API_KEY` | Secure key for admin endpoints (required — admin is disabled without it) |
+| `CALLBACK_SECRET` | Shared secret appended as `?secret=` to Hubtel callback URLs |
+| `USSD_SECRET` | Shared secret appended as `?secret=` to the Hubtel USSD URL |
 
 ## Database Schema
 

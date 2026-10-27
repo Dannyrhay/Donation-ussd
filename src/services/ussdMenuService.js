@@ -189,8 +189,8 @@ function cleanupExpiredSessions() {
   }
 }
 
-// Run cleanup every 5 minutes
-setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+// Run cleanup every 5 minutes (unref so the timer never keeps the process — or Jest — alive)
+setInterval(cleanupExpiredSessions, 5 * 60 * 1000).unref();
 
 /**
  * Process USSD request and return appropriate response

@@ -40,7 +40,8 @@ jest.mock('../../src/models', () => ({
     findByClientReference: jest.fn()
   },
   Donation: {
-    create: jest.fn().mockResolvedValue({})
+    create: jest.fn().mockResolvedValue({}),
+    deleteOne: jest.fn().mockResolvedValue({})
   },
   Donor: {}
 }));
@@ -103,6 +104,51 @@ describe('POST /api/callback/recurring', () => {
         status: 'Success'
       })
     );
+  });
+
+  test('duplicate success callback (same TransactionId) — acknowledges 200 without double-counting', async () => {
+    recurringInvoiceService.handleRecurringCallback.mockReturnValue({
+      success: true,
+      failed: false,
+      cancelled: false,
+      recurringInvoiceId: 'INV-001',
+      transactionId: 'TXN-001',
+      amount: 75
+    });
+    Subscription.findByRecurringInvoiceId.mockResolvedValue(mockSubscription);
+    const dupError = Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+    Donation.create.mockRejectedValueOnce(dupError);
+
+    const res = await request(app)
+      .post(RECURRING_URL)
+      .send({ ResponseCode: '0000', Data: { RecurringInvoiceId: 'INV-001' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.message).toBe('Recurring callback already processed');
+    expect(Donation.create).toHaveBeenCalledWith(expect.objectContaining({ reference: 'REC-TXN-001' }));
+    expect(mockSubscription.recordPayment).not.toHaveBeenCalled();
+  });
+
+  test('recordPayment failure — rolls back donation and returns 500 so Hubtel retries cleanly', async () => {
+    recurringInvoiceService.handleRecurringCallback.mockReturnValue({
+      success: true,
+      failed: false,
+      cancelled: false,
+      recurringInvoiceId: 'INV-001',
+      transactionId: 'TXN-002',
+      amount: 75
+    });
+    mockSubscription.recordPayment.mockRejectedValueOnce(new Error('write conflict'));
+    Subscription.findByRecurringInvoiceId.mockResolvedValue(mockSubscription);
+    Donation.create.mockResolvedValueOnce({ _id: 'donation-1' });
+
+    const res = await request(app)
+      .post(RECURRING_URL)
+      .send({ ResponseCode: '0000', Data: { RecurringInvoiceId: 'INV-001' } });
+
+    expect(res.status).toBe(500);
+    expect(Donation.deleteOne).toHaveBeenCalledWith({ _id: 'donation-1' });
   });
 
   test('failed payment (2001) — calls recordFailure and responds 200', async () => {
