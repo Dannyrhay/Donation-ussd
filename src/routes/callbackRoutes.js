@@ -75,7 +75,7 @@ router.post('/recurring', callbackAuth, validateBody(recurringCallbackSchema), a
     const result = recurringInvoiceService.handleRecurringCallback(req.body);
 
     // Find the subscription by recurring invoice ID
-    const { Subscription, Donation, Donor } = require('../models');
+    const { Subscription, isUniqueViolation } = require('../models');
 
     let subscription = null;
     if (result.recurringInvoiceId) {
@@ -88,78 +88,59 @@ router.post('/recurring', callbackAuth, validateBody(recurringCallbackSchema), a
     }
 
     if (subscription) {
+      let updated = subscription;
+
       if (result.success) {
         // Payment successful
         //
-        // Idempotency: Hubtel retries callbacks. The Donation is inserted FIRST and
-        // its unique `reference` (REC-<transactionId>) is the atomic guard — a
-        // duplicate insert (E11000) means this transaction was already recorded,
-        // so we acknowledge without calling recordPayment() again. Safe under
-        // concurrent retries, unlike a check-then-insert.
+        // Idempotency: Hubtel retries callbacks. The Donation insert and the
+        // subscription update run in ONE transaction, guarded by the Donation's
+        // unique `reference` (REC-<transactionId>). A retry fails the insert, the
+        // transaction rolls back, and we acknowledge without counting twice.
         if (!result.transactionId) {
-          console.warn(`Recurring callback without TransactionId for subscription ${subscription._id} — cannot deduplicate`);
+          console.warn(`Recurring callback without TransactionId for subscription ${subscription.id} — cannot deduplicate`);
         }
 
         const amount = result.amount || subscription.amount;
         const reference = `REC-${result.transactionId || Date.now()}`;
 
-        let donation;
         try {
-          donation = await Donation.create({
-            donor: subscription.donor,
-            phoneNumber: subscription.phoneNumber,
+          ({ subscription: updated } = await Subscription.recordRecurringPayment(subscription, {
             amount,
-            channel: subscription.channel,
-            frequency: subscription.frequency,
-            subscription: subscription._id,
             reference,
-            status: 'Success',
-            description: `Recurring ${subscription.frequency} donation`,
-            source: 'hubtel_recurring',
-            hubtelTransactionId: result.transactionId
-          });
+            transactionId: result.transactionId
+          }));
         } catch (err) {
-          if (err && err.code === 11000) {
+          if (isUniqueViolation(err)) {
             console.log(`Duplicate recurring callback for ${reference} — already recorded, acknowledging`);
             return res.json({
               success: true,
               message: 'Recurring callback already processed',
-              subscriptionId: subscription._id.toString(),
+              subscriptionId: subscription.id,
               status: subscription.status
             });
           }
           throw err;
         }
 
-        try {
-          await subscription.recordPayment(amount);
-        } catch (err) {
-          // Roll back so Hubtel's retry is processed fresh instead of being
-          // mistaken for a duplicate (which would leave totals un-updated)
-          await Donation.deleteOne({ _id: donation._id }).catch((delErr) => {
-            console.error(`Rollback failed for donation ${reference}:`, delErr);
-          });
-          throw err;
-        }
-
-        console.log(`Recurring payment recorded for subscription ${subscription._id}`);
+        console.log(`Recurring payment recorded for subscription ${subscription.id}`);
 
       } else if (result.failed) {
         // Payment failed
-        await subscription.recordFailure(result.message);
-        console.log(`Recurring payment failed for subscription ${subscription._id}`);
+        updated = await Subscription.recordFailure(subscription.id, result.message);
+        console.log(`Recurring payment failed for subscription ${subscription.id}`);
 
       } else if (result.cancelled) {
         // Invoice cancelled
-        await subscription.cancel('Cancelled by Hubtel');
-        console.log(`Subscription ${subscription._id} cancelled`);
+        updated = await Subscription.cancel(subscription.id, 'Cancelled by Hubtel');
+        console.log(`Subscription ${subscription.id} cancelled`);
       }
 
       res.json({
         success: true,
         message: 'Recurring callback processed',
-        subscriptionId: subscription._id.toString(),
-        status: subscription.status
+        subscriptionId: subscription.id,
+        status: updated.status
       });
     } else {
       // No subscription found, but still acknowledge the callback
@@ -308,13 +289,8 @@ router.get('/subscriptions', adminAuth, async (req, res) => {
     const { limit, skip } = parsePagination(req.query);
 
     const [subscriptions, total] = await Promise.all([
-      Subscription.find()
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate('donor')
-        .lean(),
-      Subscription.countDocuments()
+      Subscription.list({}, { skip, limit, includeDonor: true }),
+      Subscription.count()
     ]);
 
     res.json({
@@ -377,12 +353,8 @@ router.get('/donors', adminAuth, async (req, res) => {
     const { limit, skip } = parsePagination(req.query);
 
     const [donors, total] = await Promise.all([
-      Donor.find()
-        .sort({ totalDonated: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Donor.countDocuments()
+      Donor.list({ skip, limit, sortBy: 'totalDonated' }),
+      Donor.count()
     ]);
 
     res.json({

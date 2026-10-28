@@ -2,9 +2,14 @@ const express = require('express');
 const router = express.Router();
 const schedulerService = require('../services/schedulerService');
 const subscriptionProcessor = require('../services/subscriptionProcessor');
+const donationService = require('../services/donationService');
 const { Subscription, Donation, Donor } = require('../models');
 const { adminAuth } = require('../middleware/auth');
-const { parsePagination, escapeRegex } = require('../utils/pagination');
+const { parsePagination } = require('../utils/pagination');
+
+// IDs are cuids, or 24-char hex ids carried over from MongoDB
+// (isValidObjectId was used here but never defined — every :id route returned 500)
+const isValidId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 
 /**
  * Admin Routes
@@ -72,17 +77,12 @@ router.get('/subscriptions', async (req, res) => {
     const { status, phone } = req.query;
     const { limit, skip } = parsePagination(req.query);
 
-    const query = {};
-    if (status) query.status = status;
-    if (phone) query.phoneNumber = { $regex: escapeRegex(phone) };
+    const filters = { status, phoneContains: phone };
 
-    const subscriptions = await Subscription.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('donor');
-
-    const total = await Subscription.countDocuments(query);
+    const [subscriptions, total] = await Promise.all([
+      Subscription.list(filters, { skip, limit, includeDonor: true }),
+      Subscription.count(filters)
+    ]);
 
     res.json({
       success: true,
@@ -150,14 +150,14 @@ router.get('/subscriptions/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidObjectId(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid subscription ID'
       });
     }
 
-    const subscription = await Subscription.findById(id).populate('donor');
+    const subscription = await Subscription.findById(id, { includeDonor: true });
 
     if (!subscription) {
       return res.status(404).json({
@@ -167,9 +167,7 @@ router.get('/subscriptions/:id', async (req, res) => {
     }
 
     // Get related donations
-    const donations = await Donation.find({ subscription: id })
-      .sort({ createdAt: -1 })
-      .limit(10);
+    const donations = await Donation.list({ subscriptionId: id }, { limit: 10 });
 
     res.json({
       success: true,
@@ -193,7 +191,7 @@ router.post('/subscriptions/:id/trigger', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidObjectId(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid subscription ID'
@@ -234,7 +232,7 @@ router.post('/subscriptions/:id/pause', async (req, res) => {
     const { id } = req.params;
     const { reason } = req.body;
 
-    if (!isValidObjectId(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid subscription ID'
@@ -275,7 +273,7 @@ router.post('/subscriptions/:id/resume', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!isValidObjectId(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid subscription ID'
@@ -314,30 +312,30 @@ router.post('/subscriptions/:id/cancel', async (req, res) => {
     const { id } = req.params;
     const { reason } = req.body;
 
-    if (!isValidObjectId(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid subscription ID'
       });
     }
 
-    const subscription = await Subscription.findById(id);
+    // Goes through donationService so the Hubtel recurring invoice is cancelled
+    // too — cancelling only locally left Hubtel debiting the donor
+    const result = await donationService.cancelSubscription(id, reason || 'Cancelled by admin');
 
-    if (!subscription) {
-      return res.status(404).json({
+    if (!result.success) {
+      return res.status(result.error === 'Subscription not found' ? 404 : 500).json({
         success: false,
-        error: 'Subscription not found'
+        error: result.error
       });
     }
-
-    await subscription.cancel(reason || 'Cancelled by admin');
 
     console.log(`[ADMIN] Subscription cancelled: ${id}`);
 
     res.json({
       success: true,
       message: 'Subscription cancelled',
-      subscription
+      subscription: result.subscription
     });
   } catch (error) {
     console.error('[ADMIN] Cancel subscription error:', error);
@@ -357,19 +355,12 @@ router.get('/donations', async (req, res) => {
     const { status, phone, subscriptionId } = req.query;
     const { limit, skip } = parsePagination(req.query);
 
-    const query = {};
-    if (status) query.status = status;
-    if (phone) query.phoneNumber = { $regex: escapeRegex(phone) };
-    if (subscriptionId) query.subscription = subscriptionId;
+    const filters = { status, phoneContains: phone, subscriptionId };
 
-    const donations = await Donation.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('donor')
-      .populate('subscription');
-
-    const total = await Donation.countDocuments(query);
+    const [donations, total] = await Promise.all([
+      Donation.list(filters, { skip, limit, includeDonor: true, includeSubscription: true }),
+      Donation.count(filters)
+    ]);
 
     res.json({
       success: true,
@@ -395,15 +386,10 @@ router.get('/donors', async (req, res) => {
     const { sortBy = 'totalDonated' } = req.query;
     const { limit, skip } = parsePagination(req.query);
 
-    const sortOptions = {};
-    sortOptions[sortBy] = -1;
-
-    const donors = await Donor.find()
-      .sort(sortOptions)
-      .skip(skip)
-      .limit(limit);
-
-    const total = await Donor.countDocuments();
+    const [donors, total] = await Promise.all([
+      Donor.list({ skip, limit, sortBy }),
+      Donor.count()
+    ]);
 
     res.json({
       success: true,

@@ -12,7 +12,7 @@ jest.mock('../../src/services/donationService', () => ({
   getDonor: jest.fn().mockResolvedValue(null),
   cancelSubscription: jest.fn(),
   createDonation: jest.fn().mockResolvedValue({ success: true, reference: 'DON-TEST', donation: {} }),
-  createSubscription: jest.fn().mockResolvedValue({ success: true, subscription: { _id: 'SUB-1' } }),
+  createSubscription: jest.fn().mockResolvedValue({ success: true, subscription: { id: 'SUB-1' } }),
   updateDonationStatus: jest.fn().mockResolvedValue({ success: true })
 }));
 
@@ -21,6 +21,7 @@ jest.mock('../../src/services/recurringInvoiceService', () => ({
     phone.startsWith('0') ? '233' + phone.slice(1) : phone
   ),
   detectNetwork: jest.fn(() => 'mtn-gh'),
+  isAirtelTigo: jest.fn(() => false),
   createRecurringInvoice: jest.fn().mockResolvedValue({
     success: true,
     data: { recurringInvoiceId: 'INV-1', requestId: 'REQ-1', verificationType: 'USSD' }
@@ -93,7 +94,7 @@ describe('USSD frequency menu — cancel subscription option', () => {
 
   test('selecting 5 with an active subscription transitions to cancellation_confirmation', async () => {
     donationService.getActiveSubscriptions.mockResolvedValue([{
-      _id: 'SUB-ID-1',
+      id: 'SUB-ID-1',
       frequency: 'monthly',
       amount: 50
     }]);
@@ -138,7 +139,7 @@ describe('USSD cancellation confirmation step', () => {
     await processRequest({ SessionId: sessionId, Type: 'Response', Message: '1', Mobile: mobile });
 
     donationService.getActiveSubscriptions.mockResolvedValue([{
-      _id: 'SUB-ID-2',
+      id: 'SUB-ID-2',
       frequency: 'weekly',
       amount: 20
     }]);
@@ -156,7 +157,7 @@ describe('USSD cancellation confirmation step', () => {
   test('replying 1 calls cancelSubscription and returns Release with success message', async () => {
     donationService.cancelSubscription.mockResolvedValue({
       success: true,
-      subscription: { _id: 'SUB-ID-2', status: 'cancelled' }
+      subscription: { id: 'SUB-ID-2', status: 'cancelled' }
     });
 
     const response = await processRequest({
@@ -241,5 +242,48 @@ describe('USSD one-time payment — customer name sent to Hubtel', () => {
     const res = await confirmOneTime('name-known', '0244000003');
 
     expect(res.CustomerName).toBe('Ama Mensah');
+  });
+});
+
+describe('USSD one-time payment — pending donation is recorded', () => {
+  const recurringInvoiceService = require('../../src/services/recurringInvoiceService');
+
+  async function confirmOneTime(sessionId, mobile) {
+    await navigateToFrequencyMenu(sessionId, mobile);
+    await processRequest({ SessionId: sessionId, Type: 'Response', Message: '4', Mobile: mobile });
+    return processRequest({ SessionId: sessionId, Type: 'Response', Message: '1', Mobile: mobile });
+  }
+
+  beforeEach(() => jest.clearAllMocks());
+
+  test('creates a pending one-time donation before returning AddToCart (regression: nothing was saved)', async () => {
+    recurringInvoiceService.detectNetwork.mockReturnValueOnce('vodafone_gh_rec');
+
+    const res = await confirmOneTime('record-1', '0204000001');
+
+    expect(res.Type).toBe(ResponseType.ADDTOCART);
+    expect(donationService.createDonation).toHaveBeenCalledWith(expect.objectContaining({
+      phoneNumber: '233204000001',
+      amount: 5,
+      channel: 'vodafone-gh',
+      frequency: 'once',
+      sessionId: 'record-1'
+    }));
+  });
+
+  test('still returns the payment prompt if saving the donation fails', async () => {
+    donationService.createDonation.mockResolvedValueOnce({ success: false, error: 'db down' });
+
+    const res = await confirmOneTime('record-2', '0244000002');
+
+    expect(res.Type).toBe(ResponseType.ADDTOCART);
+  });
+
+  test('recurring donations do not create a one-time donation record', async () => {
+    await navigateToFrequencyMenu('record-3', '0244000003');
+    await processRequest({ SessionId: 'record-3', Type: 'Response', Message: '2', Mobile: '0244000003' }); // Monthly
+    await processRequest({ SessionId: 'record-3', Type: 'Response', Message: '1', Mobile: '0244000003' });
+
+    expect(donationService.createDonation).not.toHaveBeenCalled();
   });
 });

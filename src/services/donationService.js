@@ -32,7 +32,7 @@ async function createDonation(data) {
 
     // Create donation record
     const donation = await Donation.create({
-      donor: donor._id,
+      donorId: donor.id,
       phoneNumber,
       amount,
       channel,
@@ -105,7 +105,7 @@ async function createSubscription(data) {
 
     // Create subscription
     const subscription = await Subscription.create({
-      donor: donor._id,
+      donorId: donor.id,
       phoneNumber,
       amount,
       channel,
@@ -122,7 +122,7 @@ async function createSubscription(data) {
       managedByHubtel
     });
 
-    console.log(`Subscription created: ${subscription._id} - GHS ${amount} ${frequency} from ${phoneNumber}`);
+    console.log(`Subscription created: ${subscription.id} - GHS ${amount} ${frequency} from ${phoneNumber}`);
     if (recurringInvoiceId) {
       console.log(`Hubtel Invoice ID: ${recurringInvoiceId}`);
     }
@@ -147,18 +147,19 @@ async function createSubscription(data) {
  */
 async function updateDonationStatus(reference, status, callbackData) {
   try {
-    const donation = await Donation.findOne({ reference });
+    const existing = await Donation.findByReference(reference);
 
-    if (!donation) {
+    if (!existing) {
       console.error(`Donation not found: ${reference}`);
       return { success: false, error: 'Donation not found' };
     }
 
+    let donation;
     if (status === 'completed' || status === 'Success') {
-      await donation.markCompleted(callbackData);
+      donation = await Donation.markCompleted(existing.id, callbackData);
       console.log(`Donation completed: ${reference}`);
     } else {
-      await donation.markFailed(callbackData, status);
+      donation = await Donation.markFailed(existing.id, callbackData, status);
       console.log(`Donation failed: ${reference} - ${status}`);
     }
 
@@ -180,14 +181,14 @@ async function updateDonationStatus(reference, status, callbackData) {
  * Get donation by reference
  */
 async function getDonationByReference(reference) {
-  return Donation.findOne({ reference }).populate('donor');
+  return Donation.findByReference(reference, { includeDonor: true });
 }
 
 /**
  * Get all donations for a phone number
  */
 async function getDonationsByPhone(phoneNumber) {
-  return Donation.find({ phoneNumber }).sort({ createdAt: -1 });
+  return Donation.list({ phoneNumber }, { limit: 500 });
 }
 
 /**
@@ -220,11 +221,11 @@ async function cancelSubscription(subscriptionId, reason) {
       }
     }
 
-    await subscription.cancel(reason);
+    const cancelled = await Subscription.cancel(subscription.id, reason);
 
     return {
       success: true,
-      subscription
+      subscription: cancelled
     };
 
   } catch (error) {
@@ -249,19 +250,18 @@ async function getDueSubscriptions() {
 async function getStats() {
   try {
     const now = new Date();
-    const startOfDay = new Date(now.setHours(0, 0, 0, 0));
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
-    const [todayStats, monthStats, yearStats, subscriptionStats] = await Promise.all([
-      Donation.getTotalForPeriod(startOfDay, new Date()),
-      Donation.getTotalForPeriod(startOfMonth, new Date()),
-      Donation.getTotalForPeriod(startOfYear, new Date()),
-      Subscription.getStats()
+    const [todayStats, monthStats, yearStats, subscriptionStats, donorCount, totalDonations] = await Promise.all([
+      Donation.getTotalForPeriod(startOfDay, now),
+      Donation.getTotalForPeriod(startOfMonth, now),
+      Donation.getTotalForPeriod(startOfYear, now),
+      Subscription.getStats(),
+      Donor.count(),
+      Donation.countCompleted()
     ]);
-
-    const donorCount = await Donor.countDocuments();
-    const totalDonations = await Donation.countDocuments({ status: { $in: ['completed', 'fulfilled'] } });
 
     return {
       today: todayStats,
@@ -283,7 +283,7 @@ async function getStats() {
  */
 async function getDonor(phoneNumber) {
   try {
-    return Donor.findOne({ phoneNumber });
+    return await Donor.findByPhone(phoneNumber);
   } catch (error) {
     console.error('Error getting donor:', error);
     return null;

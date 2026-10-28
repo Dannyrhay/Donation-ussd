@@ -1,4 +1,4 @@
-const { Subscription, Donation, Donor } = require('../models');
+const { Subscription, Donation } = require('../models');
 const paymentService = require('./paymentService');
 const config = require('../config');
 const { v4: uuidv4 } = require('uuid');
@@ -99,7 +99,7 @@ function logEvent(level, event, subscriptionId, details = {}) {
  * Process a single subscription payment
  */
 async function processSubscriptionPayment(subscription) {
-  const subscriptionId = subscription._id;
+  const subscriptionId = subscription.id;
 
   // Try to acquire lock
   if (!acquireLock(subscriptionId)) {
@@ -125,35 +125,25 @@ async function processSubscriptionPayment(subscription) {
       return { success: false, reason: 'not_active' };
     }
 
-    // Check if max payments reached
-    if (currentSubscription.maxPayments &&
-        currentSubscription.paymentsCompleted >= currentSubscription.maxPayments) {
-      logEvent('info', 'MAX_PAYMENTS_REACHED', subscriptionId);
-      await currentSubscription.cancel('Maximum payments reached');
-      return { success: false, reason: 'max_payments_reached' };
-    }
-
-    // Check if end date passed
-    if (currentSubscription.endDate && new Date() > currentSubscription.endDate) {
+    // Check if invoice end date passed
+    // (the old maxPayments/endDate checks referenced fields that never existed)
+    if (currentSubscription.invoiceEndDate && new Date() > new Date(currentSubscription.invoiceEndDate)) {
       logEvent('info', 'SUBSCRIPTION_EXPIRED', subscriptionId);
-      await currentSubscription.cancel('Subscription end date reached');
+      await Subscription.setStatus(subscriptionId, 'expired', 'Subscription end date reached');
       return { success: false, reason: 'expired' };
     }
 
     // Generate unique reference for this payment
     const reference = `SUB-${Date.now()}-${uuidv4().substring(0, 8)}`;
 
-    // Get donor info
-    const donor = await Donor.findById(currentSubscription.donor);
-
     // Create donation record
     const donation = await Donation.create({
-      donor: currentSubscription.donor,
+      donorId: currentSubscription.donorId,
       phoneNumber: currentSubscription.phoneNumber,
       amount: currentSubscription.amount,
       channel: currentSubscription.channel,
       frequency: currentSubscription.frequency,
-      subscription: subscriptionId,
+      subscriptionId,
       reference,
       status: 'pending',
       description: `Recurring ${currentSubscription.frequency} donation to ${config.orgName}`,
@@ -161,7 +151,7 @@ async function processSubscriptionPayment(subscription) {
     });
 
     logEvent('info', 'DONATION_CREATED', subscriptionId, {
-      donationId: donation._id.toString(),
+      donationId: donation.id,
       reference
     });
 
@@ -186,7 +176,7 @@ async function processSubscriptionPayment(subscription) {
       return {
         success: true,
         reference,
-        donation: donation._id,
+        donation: donation.id,
         message: 'Payment initiated, awaiting confirmation'
       };
     } else {
@@ -196,10 +186,10 @@ async function processSubscriptionPayment(subscription) {
       });
 
       // Mark donation as failed
-      await donation.markFailed(null, paymentResult.error || 'Payment initiation failed');
+      await Donation.markFailed(donation.id, null, paymentResult.error || 'Payment initiation failed');
 
       // Record failure on subscription
-      await currentSubscription.recordFailure(paymentResult.error || 'Payment initiation failed');
+      await Subscription.recordFailure(subscriptionId, paymentResult.error || 'Payment initiation failed');
 
       return {
         success: false,
@@ -271,7 +261,7 @@ async function processDueSubscriptions() {
         } else {
           results.failed++;
           results.errors.push({
-            subscriptionId: subscription._id.toString(),
+            subscriptionId: subscription.id,
             reason: result.reason,
             error: result.error
           });
@@ -283,7 +273,7 @@ async function processDueSubscriptions() {
       } catch (error) {
         results.failed++;
         results.errors.push({
-          subscriptionId: subscription._id.toString(),
+          subscriptionId: subscription.id,
           error: error.message
         });
       }
@@ -312,10 +302,7 @@ async function processDueSubscriptions() {
 async function getProcessingStats() {
   try {
     const stats = await Subscription.getStats();
-    const dueCount = await Subscription.countDocuments({
-      status: 'active',
-      nextPaymentDate: { $lte: new Date() }
-    });
+    const dueCount = await Subscription.countDue();
 
     return {
       ...stats,
@@ -357,11 +344,11 @@ async function pauseSubscription(subscriptionId, reason) {
       return { success: false, error: 'Subscription not found' };
     }
 
-    await subscription.pause(reason);
+    const paused = await Subscription.pause(subscriptionId, reason);
 
     logEvent('info', 'SUBSCRIPTION_PAUSED', subscriptionId, { reason });
 
-    return { success: true, subscription };
+    return { success: true, subscription: paused };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -382,11 +369,11 @@ async function resumeSubscription(subscriptionId) {
       return { success: false, error: `Cannot resume: status is ${subscription.status}` };
     }
 
-    await subscription.resume();
+    const resumed = await Subscription.resume(subscription);
 
     logEvent('info', 'SUBSCRIPTION_RESUMED', subscriptionId);
 
-    return { success: true, subscription };
+    return { success: true, subscription: resumed };
   } catch (error) {
     return { success: false, error: error.message };
   }

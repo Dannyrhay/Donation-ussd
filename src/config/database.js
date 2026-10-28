@@ -1,61 +1,37 @@
-const mongoose = require('mongoose');
-
-// When the DB is unreachable, mongoose queues queries for 10s by default. That
-// stalls USSD replies past Hubtel's timeout ("Error:UUE"). Fail fast instead —
-// USSD code paths already catch DB errors and show a message.
-mongoose.set('bufferTimeoutMS', 3000);
+const { getClient } = require('../db/prisma');
 
 /**
  * Database Connection Module
  *
- * Connects to MongoDB (local or Atlas cloud)
+ * Connects to PostgreSQL (Railway) through Prisma. Schema changes are applied
+ * by `prisma migrate deploy` (Railway pre-deploy command), not at runtime.
  */
 
 async function connectDatabase() {
-  const mongoUri = process.env.MONGODB_URI;
-
-  // Skip connection if no URI provided
-  if (!mongoUri) {
+  if (!process.env.DATABASE_URL) {
     console.log('='.repeat(50));
-    console.log('MONGODB_URI not set - running without database');
+    console.log('DATABASE_URL not set - running without database');
     console.log('='.repeat(50));
     return null;
   }
 
   try {
-    await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 10000, // 10 second timeout
-      connectTimeoutMS: 10000
-    });
+    const prisma = getClient();
+    await prisma.$connect();
+    await prisma.$queryRaw`SELECT 1`; // verify the connection actually works
 
     console.log('='.repeat(50));
-    console.log('MongoDB Connected Successfully');
-    console.log(`Database: ${mongoose.connection.name}`);
+    console.log('PostgreSQL Connected Successfully');
     console.log('='.repeat(50));
 
-    // Handle connection events
-    mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.log('MongoDB disconnected');
-    });
-
-    return mongoose.connection;
+    return prisma;
 
   } catch (error) {
     console.error('='.repeat(50));
-    console.error('MongoDB Connection Failed');
+    console.error('PostgreSQL Connection Failed');
     console.error('Error:', error.message);
     console.error('='.repeat(50));
-    console.error('');
-    console.error('Make sure MongoDB is running or provide MONGODB_URI in .env');
-    console.error('');
-    console.error('Options:');
-    console.error('1. Install MongoDB locally: https://www.mongodb.com/try/download/community');
-    console.error('2. Use MongoDB Atlas (free): https://www.mongodb.com/atlas');
-    console.error('');
+    console.error('Check DATABASE_URL (on Railway: reference ${{Postgres.DATABASE_URL}})');
 
     // Don't crash the app - continue without database
     // (useful for testing USSD flow without DB)
@@ -64,8 +40,8 @@ async function connectDatabase() {
 }
 
 async function disconnectDatabase() {
-  await mongoose.disconnect();
-  console.log('MongoDB disconnected');
+  await getClient().$disconnect();
+  console.log('PostgreSQL disconnected');
 }
 
 module.exports = {
