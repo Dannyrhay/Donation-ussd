@@ -194,7 +194,9 @@ async function createRecurringInvoice(invoiceData) {
     customerMobileNumber: formattedPhone,
     paymentOption: config.recurringDefaults.paymentOption,
     channel,
-    customerName: customerName || 'Donor',
+    // Optional per Hubtel docs. Never send a placeholder like 'Donor' — Hubtel
+    // stores it as the customer's name on the merchant dashboard.
+    ...(customerName ? { customerName } : {}),
     recurringAmount: amount,
     totalAmount: amount,
     initialAmount: amount,

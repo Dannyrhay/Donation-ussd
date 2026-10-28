@@ -9,6 +9,7 @@ jest.mock('../../src/config/database', () => ({
 
 jest.mock('../../src/services/donationService', () => ({
   getActiveSubscriptions: jest.fn().mockResolvedValue([]),
+  getDonor: jest.fn().mockResolvedValue(null),
   cancelSubscription: jest.fn(),
   createDonation: jest.fn().mockResolvedValue({ success: true, reference: 'DON-TEST', donation: {} }),
   createSubscription: jest.fn().mockResolvedValue({ success: true, subscription: { _id: 'SUB-1' } }),
@@ -206,5 +207,39 @@ describe('USSD cancellation confirmation step', () => {
 
     expect(response.Type).toBe(ResponseType.RESPONSE);
     expect(response.Message).toContain('Confirm cancellation');
+  });
+});
+
+describe('USSD one-time payment — customer name sent to Hubtel', () => {
+  // amount '1' (GHS 5) → frequency '4' (One-time) → confirm '1' → AddToCart
+  async function confirmOneTime(sessionId, mobile) {
+    await navigateToFrequencyMenu(sessionId, mobile);
+    await processRequest({ SessionId: sessionId, Type: 'Response', Message: '4', Mobile: mobile });
+    return processRequest({ SessionId: sessionId, Type: 'Response', Message: '1', Mobile: mobile });
+  }
+
+  test('omits CustomerName for unknown donors instead of sending placeholder "Donor"', async () => {
+    donationService.getDonor.mockResolvedValueOnce(null);
+
+    const res = await confirmOneTime('name-unknown', '0244000001');
+
+    expect(res.Type).toBe(ResponseType.ADDTOCART);
+    expect(res).not.toHaveProperty('CustomerName');
+  });
+
+  test('omits CustomerName when stored name is the legacy "Donor" placeholder', async () => {
+    donationService.getDonor.mockResolvedValueOnce({ name: 'Donor' });
+
+    const res = await confirmOneTime('name-legacy', '0244000002');
+
+    expect(res).not.toHaveProperty('CustomerName');
+  });
+
+  test('sends the real name when the donor has one', async () => {
+    donationService.getDonor.mockResolvedValueOnce({ name: 'Ama Mensah' });
+
+    const res = await confirmOneTime('name-known', '0244000003');
+
+    expect(res.CustomerName).toBe('Ama Mensah');
   });
 });

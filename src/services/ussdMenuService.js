@@ -552,8 +552,9 @@ async function handleConfirmation(sessionId, input, session, mobile) {
       ? `Donation to ${config.orgName}`
       : `${session.frequency} donation to ${config.orgName}`;
 
-    // Get donor name if exists
-    let customerName = 'Donor';
+    // Get donor name if we know a real one. Left undefined otherwise — a
+    // placeholder would be stored by Hubtel as the customer's name.
+    let customerName;
     try {
       const donor = await donationService.getDonor(mobile);
       if (donor && donor.name && donor.name !== 'Donor') {

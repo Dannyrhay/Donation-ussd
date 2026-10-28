@@ -118,7 +118,8 @@ async function initiatePayment(paymentData) {
   // Real Hubtel API call
   try {
     const requestBody = {
-      CustomerName: customerName || 'Donor',
+      // Optional — omit rather than send a placeholder Hubtel would store as the name
+      ...(customerName ? { CustomerName: customerName } : {}),
       CustomerMsisdn: formattedPhone,
       CustomerEmail: '',
       Channel: channel,
@@ -219,7 +220,9 @@ async function handlePaymentCallback(callbackData) {
   // Update donor name if we have a real one and it's currently 'Donor' or empty
   if (customerName && customerName !== 'Donor' && customerPhone) {
     try {
-      const Donor = mongoose.model('Donor');
+      // (was `mongoose.model('Donor')` with mongoose never imported — threw a
+      // ReferenceError on every callback, so real names were never saved)
+      const { Donor } = require('../models');
       const donor = await Donor.findOne({ phoneNumber: formatPhoneNumber(customerPhone) });
       if (donor && (!donor.name || donor.name === 'Donor')) {
         donor.name = customerName;
