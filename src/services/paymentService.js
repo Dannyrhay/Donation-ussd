@@ -118,7 +118,8 @@ async function initiatePayment(paymentData) {
   // Real Hubtel API call
   try {
     const requestBody = {
-      CustomerName: customerName || 'Donor',
+      // Optional — omit rather than send a placeholder Hubtel would store as the name
+      ...(customerName ? { CustomerName: customerName } : {}),
       CustomerMsisdn: formattedPhone,
       CustomerEmail: '',
       Channel: channel,
@@ -155,9 +156,9 @@ async function initiatePayment(paymentData) {
     // These are used to match payment and fulfilment callbacks back to this donation
     const hubtelSessionId = response.data?.Data?.SessionId || response.data?.data?.SessionId;
     const hubtelOrderId = response.data?.Data?.OrderId || response.data?.data?.OrderId;
-    if (hubtelSessionId || hubtelOrderId) {
+    if ((hubtelSessionId || hubtelOrderId) && donationResult.donation) {
       const { Donation } = require('../models');
-      await Donation.findOneAndUpdate({ reference }, { hubtelSessionId, hubtelOrderId });
+      await Donation.setHubtelIds(donationResult.donation.id, { hubtelSessionId, hubtelOrderId });
       console.log(`Stored Hubtel identifiers — SessionId: ${hubtelSessionId}, OrderId: ${hubtelOrderId}`);
     }
 
@@ -216,14 +217,13 @@ async function handlePaymentCallback(callbackData) {
   const customerPhone = callbackData.OrderInfo?.CustomerMobileNumber;
   const customerName = callbackData.OrderInfo?.CustomerName;
 
-  // Update donor name if we have a real one and it's currently 'Donor' or empty
+  const { Donation, Donor } = require('../models');
+
+  // Save the donor's real name (from Hubtel) if we don't have one yet
   if (customerName && customerName !== 'Donor' && customerPhone) {
     try {
-      const Donor = mongoose.model('Donor');
-      const donor = await Donor.findOne({ phoneNumber: formatPhoneNumber(customerPhone) });
-      if (donor && (!donor.name || donor.name === 'Donor')) {
-        donor.name = customerName;
-        await donor.save();
+      const updated = await Donor.setNameIfMissing(formatPhoneNumber(customerPhone), customerName);
+      if (updated) {
         console.log(`Updated donor name for ${customerPhone} to ${customerName}`);
       }
     } catch (err) {
@@ -263,22 +263,17 @@ async function handlePaymentCallback(callbackData) {
   // Look up donation:
   //   1. hubtelSessionId / hubtelOrderId — only available if Hubtel returns them at initiation (may not)
   //   2. CustomerMobileNumber — most reliable since it's always in the callback and stored on donation
-  const { Donation } = require('../models');
   let donation = null;
 
   if (sessionId) {
-    donation = await Donation.findOne({ hubtelSessionId: sessionId });
+    donation = await Donation.findByHubtelSessionId(sessionId);
   }
   if (!donation && orderId) {
-    donation = await Donation.findOne({ hubtelOrderId: orderId });
+    donation = await Donation.findByHubtelOrderId(orderId);
   }
   if (!donation && customerPhone) {
     // Match the most recent pending one-time donation for this phone number
-    donation = await Donation.findOne({
-      phoneNumber: customerPhone,
-      frequency: 'once',
-      status: 'pending'
-    });
+    donation = await Donation.findLatestPendingOnceByPhone(formatPhoneNumber(customerPhone));
   }
 
   if (!donation) {
@@ -292,10 +287,7 @@ async function handlePaymentCallback(callbackData) {
 
   // Store Hubtel identifiers on the donation for future reference
   if (sessionId || orderId) {
-    await Donation.findOneAndUpdate(
-      { _id: donation._id },
-      { hubtelSessionId: sessionId, hubtelOrderId: orderId }
-    );
+    await Donation.setHubtelIds(donation.id, { hubtelSessionId: sessionId, hubtelOrderId: orderId });
   }
 
   const reference = donation.reference;
@@ -344,20 +336,10 @@ async function getPayment(reference) {
 async function getAllPayments(filters = {}) {
   const { Donation } = require('../models');
 
-  let query = {};
-
-  if (filters.status) {
-    query.status = filters.status;
-  }
-
-  if (filters.phoneNumber) {
-    query.phoneNumber = filters.phoneNumber;
-  }
-
-  return Donation.find(query)
-    .sort({ createdAt: -1 })
-    .limit(filters.limit || 100)
-    .populate('donor');
+  return Donation.list(
+    { status: filters.status, phoneNumber: filters.phoneNumber },
+    { limit: filters.limit || 100, includeDonor: true }
+  );
 }
 
 /**
@@ -416,24 +398,19 @@ async function handleFulfilmentCallback(callbackData) {
       return FULFILMENT_RESPONSE;
     }
 
-    const pipeline = [{ $set: { status: 'fulfilled', fulfilledAt: '$$NOW', completedAt: { $ifNull: ['$completedAt', '$$NOW'] } } }];
-    const opts = { new: true };
-
-    // Use aggregation pipeline update so completedAt can be set conditionally
+    // Atomic update that sets completedAt only if missing
     // (handles race condition where fulfilment arrives before payment callback)
-    let donation = sessionId
-      ? await Donation.findOneAndUpdate({ hubtelSessionId: sessionId, fulfilledAt: { $exists: false } }, pipeline, opts)
+    let donationId = sessionId
+      ? await Donation.markFulfilledByHubtelSessionId(sessionId)
       : null;
 
     // Fallback: try OrderId
-    if (!donation && orderId) {
-      donation = await Donation.findOneAndUpdate(
-        { hubtelOrderId: orderId, fulfilledAt: { $exists: false } }, pipeline, opts
-      );
+    if (!donationId && orderId) {
+      donationId = await Donation.markFulfilledByHubtelOrderId(orderId);
     }
 
-    if (donation) {
-      console.log(`Fulfilment recorded for donation ${donation._id} (hubtelSessionId: ${sessionId}, hubtelOrderId: ${orderId})`);
+    if (donationId) {
+      console.log(`Fulfilment recorded for donation ${donationId} (hubtelSessionId: ${sessionId}, hubtelOrderId: ${orderId})`);
     } else {
       console.warn(`FULFILMENT: No matching donation found (hubtelSessionId: ${sessionId}, hubtelOrderId: ${orderId})`);
     }

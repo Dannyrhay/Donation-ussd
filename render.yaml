@@ -13,7 +13,7 @@ services:
         sync: false
       - key: HUBTEL_MERCHANT_ID
         sync: false
-      - key: MONGODB_URI
+      - key: DATABASE_URL
         sync: false
       - key: CALLBACK_URL
         sync: false

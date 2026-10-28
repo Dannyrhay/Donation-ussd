@@ -1,107 +1,90 @@
-const mongoose = require('mongoose');
+const { getClient } = require('../db/prisma');
+const { toPlain } = require('./mapper');
 
 /**
- * Donor Model
+ * Donor repository
  *
- * Stores information about people who donate
+ * People who donate, keyed by phone number.
  */
-const donorSchema = new mongoose.Schema({
-  // Phone number (primary identifier)
-  phoneNumber: {
-    type: String,
-    required: true,
-    unique: true,
-    index: true
-  },
 
-  // Name (optional - can be collected later)
-  name: {
-    type: String,
-    default: ''
-  },
+const NETWORKS = ['mtn', 'telecel', 'airteltigo', 'unknown'];
+const SORTABLE_FIELDS = ['totalDonated', 'donationCount', 'lastDonationAt', 'firstDonationAt', 'createdAt'];
 
-  // Email (optional)
-  email: {
-    type: String,
-    default: ''
-  },
+function normalizeNetwork(network) {
+  if (network === 'vodafone') return 'telecel';
+  if (network === 'tigo') return 'airteltigo';
+  return NETWORKS.includes(network) ? network : 'unknown';
+}
 
-  // Mobile network (MTN, Telecel, AirtelTigo)
-  network: {
-    type: String,
-    enum: ['mtn', 'telecel', 'airteltigo', 'unknown'],
-    default: 'unknown'
-  },
+async function findById(id) {
+  return toPlain(await getClient().donor.findUnique({ where: { id } }));
+}
 
-  // Total amount donated (lifetime)
-  totalDonated: {
-    type: Number,
-    default: 0
-  },
-
-  // Number of donations
-  donationCount: {
-    type: Number,
-    default: 0
-  },
-
-  // First donation date
-  firstDonationAt: {
-    type: Date
-  },
-
-  // Last donation date
-  lastDonationAt: {
-    type: Date
-  },
-
-  // Is this donor active?
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-
-  // Notes (for admin use)
-  notes: {
-    type: String,
-    default: ''
-  }
-
-}, {
-  timestamps: true  // Adds createdAt and updatedAt
-});
+async function findByPhone(phoneNumber) {
+  return toPlain(await getClient().donor.findUnique({ where: { phoneNumber } }));
+}
 
 /**
- * Update donor statistics after a successful donation
+ * Find or create donor by phone number. Atomic upsert — two concurrent first
+ * donations from the same number can't create duplicate donors.
  */
-donorSchema.methods.recordDonation = async function(amount) {
-  this.totalDonated += amount;
-  this.donationCount += 1;
-  this.lastDonationAt = new Date();
-
-  if (!this.firstDonationAt) {
-    this.firstDonationAt = new Date();
-  }
-
-  await this.save();
-};
+async function findOrCreateByPhone(phoneNumber, network = 'unknown') {
+  return toPlain(await getClient().donor.upsert({
+    where: { phoneNumber },
+    update: {},
+    create: { phoneNumber, network: normalizeNetwork(network) }
+  }));
+}
 
 /**
- * Find or create donor by phone number
+ * Update lifetime statistics after a successful donation (single atomic statement)
+ *
+ * @param {object} [tx] - optional transaction client
  */
-donorSchema.statics.findOrCreateByPhone = async function(phoneNumber, network = 'unknown') {
-  let donor = await this.findOne({ phoneNumber });
+async function recordDonation(donorId, amount, tx = getClient()) {
+  const now = new Date(); // app clock, consistent with Prisma-written timestamps
+  await tx.$executeRaw`
+    UPDATE "donors"
+    SET "totalDonated"    = "totalDonated" + ${amount}::numeric,
+        "donationCount"   = "donationCount" + 1,
+        "lastDonationAt"  = ${now},
+        "firstDonationAt" = COALESCE("firstDonationAt", ${now}),
+        "updatedAt"       = ${now}
+    WHERE "id" = ${donorId}`;
+}
 
-  if (!donor) {
-    donor = await this.create({
-      phoneNumber,
-      network
-    });
-  }
+/**
+ * Save a real name (e.g. from Hubtel's callback) only if we don't have one yet.
+ * Treats the legacy 'Donor' placeholder as "no name".
+ */
+async function setNameIfMissing(phoneNumber, name) {
+  const result = await getClient().donor.updateMany({
+    where: { phoneNumber, name: { in: ['', 'Donor'] } },
+    data: { name }
+  });
+  return result.count > 0;
+}
 
-  return donor;
+async function list({ skip = 0, limit = 100, sortBy = 'totalDonated' } = {}) {
+  const field = SORTABLE_FIELDS.includes(sortBy) ? sortBy : 'totalDonated';
+  return toPlain(await getClient().donor.findMany({
+    orderBy: { [field]: 'desc' },
+    skip,
+    take: limit
+  }));
+}
+
+async function count() {
+  return getClient().donor.count();
+}
+
+module.exports = {
+  findById,
+  findByPhone,
+  findOrCreateByPhone,
+  recordDonation,
+  setNameIfMissing,
+  list,
+  count,
+  SORTABLE_FIELDS
 };
-
-const Donor = mongoose.model('Donor', donorSchema);
-
-module.exports = Donor;

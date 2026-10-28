@@ -1,0 +1,111 @@
+// Prisma schema — PostgreSQL on Railway
+//
+// IDs are strings so records migrated from MongoDB keep their original ObjectId
+// (hex) as `id`, preserving every donor ↔ donation ↔ subscription link.
+// Allowed values for status/channel/frequency/source are enforced with CHECK
+// constraints in the migration SQL (Prisma enums can't represent 'mtn-gh').
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Donor {
+  id              String    @id @default(cuid())
+  phoneNumber     String    @unique
+  name            String    @default("")
+  email           String    @default("")
+  network         String    @default("unknown") // mtn | telecel | airteltigo | unknown
+  totalDonated    Decimal   @default(0) @db.Decimal(12, 2)
+  donationCount   Int       @default(0)
+  firstDonationAt DateTime?
+  lastDonationAt  DateTime?
+  isActive        Boolean   @default(true)
+  notes           String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  donations     Donation[]
+  subscriptions Subscription[]
+
+  @@map("donors")
+}
+
+model Donation {
+  id                  String    @id @default(cuid())
+  donorId             String
+  phoneNumber         String
+  amount              Decimal   @db.Decimal(12, 2)
+  channel             String // mtn-gh | vodafone-gh | tigo-gh | mtn_gh_rec | vodafone_gh_rec
+  frequency           String    @default("once")
+  subscriptionId      String?
+  reference           String    @unique
+  sessionId           String?
+  status              String    @default("pending")
+  description         String    @default("Donation to Jesus Mission Fund")
+  hubtelTransactionId String?
+  hubtelSessionId     String? // Hubtel's payment session (not the USSD session)
+  hubtelOrderId       String? // used to match fulfilment callbacks
+  hubtelResponse      Json?
+  callbackData        Json?
+  errorMessage        String?
+  initiatedAt         DateTime  @default(now())
+  completedAt         DateTime?
+  fulfilledAt         DateTime?
+  source              String    @default("ussd")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  donor        Donor         @relation(fields: [donorId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([donorId])
+  @@index([phoneNumber])
+  @@index([status])
+  @@index([subscriptionId])
+  @@index([hubtelSessionId])
+  @@index([hubtelOrderId])
+  @@index([createdAt])
+  @@map("donations")
+}
+
+model Subscription {
+  id                     String    @id @default(cuid())
+  donorId                String
+  phoneNumber            String
+  amount                 Decimal   @db.Decimal(12, 2)
+  channel                String
+  frequency              String // weekly | monthly | annually
+  status                 String    @default("pending")
+  recurringInvoiceId     String?
+  hubtelRequestId        String?
+  hubtelVerificationType String?
+  hubtelResponseCode     String?
+  nextPaymentDate        DateTime?
+  lastPaymentDate        DateTime?
+  paymentsCompleted      Int       @default(0)
+  paymentsFailed         Int       @default(0)
+  totalCollected         Decimal   @default(0) @db.Decimal(12, 2)
+  invoiceEndDate         DateTime?
+  statusReason           String?
+  originalSessionId      String?
+  clientReference        String?
+  source                 String    @default("ussd")
+  managedByHubtel        Boolean   @default(true)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  donor     Donor      @relation(fields: [donorId], references: [id])
+  donations Donation[]
+
+  @@index([donorId])
+  @@index([phoneNumber, status])
+  @@index([status])
+  @@index([recurringInvoiceId])
+  @@index([clientReference])
+  @@index([nextPaymentDate])
+  @@map("subscriptions")
+}

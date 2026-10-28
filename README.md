@@ -11,7 +11,7 @@ A USSD-based donation system built with Node.js and integrated with Hubtel APIs 
 - Multiple frequencies: One-time, Weekly, Monthly, Quarterly, Annually
 - Mobile Money support: MTN, Telecel, AirtelTigo
 - **Automated recurring subscription payments** with node-cron scheduler
-- MongoDB database for donor and transaction tracking
+- PostgreSQL (Railway) via Prisma for donor and transaction tracking
 - **Security features**: Rate limiting, Helmet headers, Admin authentication
 
 ## Recent Updates
@@ -35,7 +35,7 @@ A USSD-based donation system built with Node.js and integrated with Hubtel APIs 
 │  Donor   │Prompt│   Hubtel     │<──────────────┘
 │  Phone   │<─────│  (AddToCart) │   Type: "AddToCart"
 └──────────┘      └──────────────┘      ┌─────────────────┐
-                         │              │    MongoDB      │
+                         │              │   PostgreSQL    │
                          └─────────────>│    Database     │
                          Callback       └─────────────────┘
 ```
@@ -83,7 +83,7 @@ donation-ussd/
 ├── src/
 │   ├── config/
 │   │   ├── index.js              # App configuration
-│   │   └── database.js           # MongoDB connection
+│   │   └── database.js           # PostgreSQL connection (Prisma)
 │   ├── controllers/
 │   │   └── ussdController.js     # USSD request handler
 │   ├── models/
@@ -118,7 +118,7 @@ donation-ussd/
 ### Prerequisites
 
 - Node.js v18+
-- MongoDB database
+- PostgreSQL 15+ (Railway Postgres, or Docker locally)
 - Hubtel merchant account with USSD service
 
 ### Setup
@@ -151,8 +151,8 @@ donation-ussd/
    # Organization
    ORG_NAME=Jesus Mission Fund
 
-   # MongoDB
-   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/donation_ussd
+   # PostgreSQL (on Railway: DATABASE_URL=${{Postgres.DATABASE_URL}})
+   DATABASE_URL=postgresql://user:password@localhost:5432/donation_ussd
 
    # Scheduler (for recurring payments)
    SCHEDULER_ENABLED=true
@@ -325,7 +325,7 @@ Railway deploys automatically on push. Enable **Wait for CI** in the Railway ser
 | `HUBTEL_API_KEY` | Your Hubtel API key |
 | `HUBTEL_API_SECRET` | Your Hubtel API secret |
 | `HUBTEL_MERCHANT_ID` | Your Hubtel merchant ID |
-| `MONGODB_URI` | MongoDB connection string |
+| `DATABASE_URL` | PostgreSQL connection string (Railway: reference `${{Postgres.DATABASE_URL}}`) |
 | `CALLBACK_URL` | Your deployed callback URL |
 | `ORG_NAME` | Organization name |
 | `SCHEDULER_ENABLED` | `true` to enable scheduler |
@@ -333,6 +333,34 @@ Railway deploys automatically on push. Enable **Wait for CI** in the Railway ser
 | `ADMIN_API_KEY` | Secure key for admin endpoints (required — admin is disabled without it) |
 | `CALLBACK_SECRET` | Shared secret appended as `?secret=` to Hubtel callback URLs |
 | `USSD_SECRET` | Shared secret appended as `?secret=` to the Hubtel USSD URL |
+
+## Database (PostgreSQL + Prisma)
+
+- Schema: `prisma/schema.prisma`. Migrations: `prisma/migrations/` (the init migration also adds CHECK constraints for allowed status/channel/frequency values).
+- Money columns are `DECIMAL(12,2)` — exact in the database, returned to the app as numbers.
+- Railway applies migrations automatically before each deploy (`railway.json` → `preDeployCommand: npm run db:migrate`).
+- Changing the schema: edit `schema.prisma`, run `npm run db:migrate:dev -- --name <change>` against a local database, commit the new migration. CI fails if the schema and migrations drift.
+
+### Local database
+
+```bash
+docker run -d --name jmf-pg -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:17-alpine
+export DATABASE_URL=postgresql://postgres:dev@localhost:5432/postgres
+npm run db:migrate
+TEST_DATABASE_URL=$DATABASE_URL npm test   # also runs the repository integration tests
+```
+
+### One-time migration from MongoDB (cutover runbook)
+
+1. In Railway: add a **PostgreSQL** service; on the app service set `DATABASE_URL=${{Postgres.DATABASE_URL}}`.
+2. Locally, against Railway's **public** Postgres URL, create the tables: `DATABASE_URL=<public url> npm run db:migrate`
+3. Dry run (reads MongoDB only, writes nothing — review any reported problem rows):
+   `MONGODB_URI=<atlas uri> DATABASE_URL=<public url> npm run db:import-mongo`
+4. Copy the data while the old app is still live: `... npm run db:import-mongo -- --execute` → must end with `✔ OK`.
+5. Deploy this branch (pick a quiet time).
+6. Immediately run the import **again** to pick up gifts made to MongoDB between steps 4 and 5. It's safe to re-run: copied rows are skipped, and donors the new app already created are matched by phone number.
+7. Dial the code, make a GHS 1 test donation, check `/api/admin/donations`.
+8. Keep Atlas read-only for a few weeks as a backup, then remove `MONGODB_URI`.
 
 ## Database Schema
 

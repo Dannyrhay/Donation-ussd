@@ -31,6 +31,17 @@ const ResponseType = {
 };
 
 /**
+ * Standard (one-time) payment channel for a phone number.
+ * detectNetwork() returns recurring-invoice channel names.
+ */
+function oneTimeChannel(mobile) {
+  const recurringChannel = recurringInvoiceService.detectNetwork(mobile);
+  if (recurringChannel === 'vodafone_gh_rec') return 'vodafone-gh';
+  if (recurringChannel === 'at_gh') return 'tigo-gh';
+  return 'mtn-gh';
+}
+
+/**
  * Check if frequency is recurring (not one-time)
  */
 function isRecurringFrequency(frequencyCode) {
@@ -405,7 +416,7 @@ async function handleFrequencySelection(sessionId, input, session, mobile) {
     const subscription = subscriptions[0];
     updateSession(sessionId, {
       step: 'cancellation_confirmation',
-      cancelSubscriptionId: subscription._id,
+      cancelSubscriptionId: subscription.id,
       cancelFrequency: subscription.frequency,
       cancelAmount: subscription.amount
     });
@@ -552,8 +563,9 @@ async function handleConfirmation(sessionId, input, session, mobile) {
       ? `Donation to ${config.orgName}`
       : `${session.frequency} donation to ${config.orgName}`;
 
-    // Get donor name if exists
-    let customerName = 'Donor';
+    // Get donor name if we know a real one. Left undefined otherwise — a
+    // placeholder would be stored by Hubtel as the customer's name.
+    let customerName;
     try {
       const donor = await donationService.getDonor(mobile);
       if (donor && donor.name && donor.name !== 'Donor') {
@@ -607,7 +619,7 @@ async function handleConfirmation(sessionId, input, session, mobile) {
           });
 
           if (subscriptionResult.success) {
-            console.log(`Subscription created: ${subscriptionResult.subscription._id}`);
+            console.log(`Subscription created: ${subscriptionResult.subscription.id}`);
           }
 
           // Update session with recurring invoice info
@@ -659,6 +671,23 @@ async function handleConfirmation(sessionId, input, session, mobile) {
       clientReference,
       paymentInitiated: new Date()
     });
+
+    // Record the pending donation so Hubtel's payment callback can match it (by
+    // phone) and mark it completed. Previously nothing was saved for one-time
+    // gifts: the callback found no donation, and no donor row existed to store
+    // the customer's name on. createDonation never throws — a DB failure must not
+    // block the payment prompt.
+    const donationResult = await donationService.createDonation({
+      phoneNumber: recurringInvoiceService.formatPhoneNumber(mobile),
+      amount: session.amount,
+      channel: oneTimeChannel(mobile),
+      frequency: 'once',
+      sessionId,
+      description
+    });
+    if (!donationResult || !donationResult.success) {
+      console.error('Could not record pending one-time donation:', donationResult && donationResult.error);
+    }
 
     // Return AddToCart response to trigger payment prompt
     return buildAddToCartResponse(sessionId, session.amount, description, clientReference, customerName);

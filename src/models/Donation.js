@@ -1,218 +1,206 @@
-const mongoose = require('mongoose');
+const { getClient, Prisma } = require('../db/prisma');
+const { toPlain } = require('./mapper');
+const Donor = require('./Donor');
 
 /**
- * Donation Model
+ * Donation repository
  *
- * Records each individual donation/payment transaction
+ * Each individual donation/payment transaction.
  */
-const donationSchema = new mongoose.Schema({
-  // Reference to donor
-  donor: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Donor',
-    required: true,
-    index: true
-  },
 
-  // Phone number (for quick lookup)
-  phoneNumber: {
-    type: String,
-    required: true,
-    index: true
-  },
+const COMPLETED_STATUSES = ['completed', 'fulfilled'];
 
-  // Amount in GHS
-  amount: {
-    type: Number,
-    required: true,
-    min: 1
-  },
+function jsonOrNull(value) {
+  return value === undefined || value === null ? Prisma.DbNull : value;
+}
 
-  // Payment channel (standard or recurring)
-  channel: {
-    type: String,
-    enum: ['mtn-gh', 'vodafone-gh', 'tigo-gh', 'mtn_gh_rec', 'vodafone_gh_rec'],
-    required: true
-  },
-
-  // Frequency type
-  frequency: {
-    type: String,
-    enum: ['once', 'weekly', 'monthly', 'annually'],
-    default: 'once'
-  },
-
-  // Reference to subscription (if recurring)
-  subscription: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Subscription',
-    default: null
-  },
-
-  // Unique reference for this transaction
-  reference: {
-    type: String,
-    required: true,
-    unique: true,
-    index: true
-  },
-
-  // USSD session ID
-  sessionId: {
-    type: String
-  },
-
-  // Payment status
-  status: {
-    type: String,
-    enum: ['pending', 'processing', 'completed', 'fulfilled', 'Success', 'failed', 'cancelled', 'refunded'],
-    default: 'pending',
-    index: true
-  },
-
-  // Description
-  description: {
-    type: String,
-    default: 'Donation to Jesus Mission Fund'
-  },
-
-  // Hubtel transaction ID
-  hubtelTransactionId: {
-    type: String
-  },
-
-  // Hubtel payment session ID (returned in Hubtel's initiation response Data.SessionId)
-  // This is Hubtel's internal payment session — different from the USSD sessionId
-  hubtelSessionId: {
-    type: String,
-    sparse: true,
-    index: true
-  },
-
-  // Hubtel order ID (returned when payment is initiated — used to match fulfilment callbacks)
-  hubtelOrderId: {
-    type: String,
-    sparse: true,
-    index: true
-  },
-
-  // Hubtel response data
-  hubtelResponse: {
-    type: mongoose.Schema.Types.Mixed
-  },
-
-  // Callback data received
-  callbackData: {
-    type: mongoose.Schema.Types.Mixed
-  },
-
-  // Error message (if failed)
-  errorMessage: {
-    type: String
-  },
-
-  // When payment was initiated
-  initiatedAt: {
-    type: Date,
-    default: Date.now
-  },
-
-  // When payment was completed
-  completedAt: {
-    type: Date
-  },
-
-  // When service was fulfilled (set by fulfilment callback)
-  fulfilledAt: {
-    type: Date
-  },
-
-  // Source of donation
-  source: {
-    type: String,
-    enum: ['ussd', 'web', 'app', 'subscription', 'hubtel_recurring'],
-    default: 'ussd'
-  }
-
-}, {
-  timestamps: true
-});
+function buildWhere({ status, phoneNumber, phoneContains, subscriptionId } = {}) {
+  const where = {};
+  if (typeof status === 'string' && status) where.status = status;
+  if (typeof phoneNumber === 'string' && phoneNumber) where.phoneNumber = phoneNumber;
+  if (typeof phoneContains === 'string' && phoneContains) where.phoneNumber = { contains: phoneContains };
+  if (typeof subscriptionId === 'string' && subscriptionId) where.subscriptionId = subscriptionId;
+  return where;
+}
 
 /**
- * Mark donation as completed
+ * @param {object} data - Prisma create data (uses donorId / subscriptionId)
+ * @param {object} [tx] - optional transaction client
+ * @throws unique violation (see isUniqueViolation) when `reference` already exists
  */
-donationSchema.methods.markCompleted = async function(callbackData) {
-  this.status = 'completed';
-  this.completedAt = new Date();
-  this.callbackData = callbackData;
+async function create(data, tx = getClient()) {
+  return toPlain(await tx.donation.create({ data }));
+}
 
-  if (callbackData?.Data?.TransactionId) {
-    this.hubtelTransactionId = callbackData.Data.TransactionId;
-  }
+async function findById(id) {
+  return toPlain(await getClient().donation.findUnique({ where: { id } }));
+}
 
-  await this.save();
+async function findByReference(reference, { includeDonor = false } = {}) {
+  return toPlain(await getClient().donation.findUnique({
+    where: { reference },
+    include: includeDonor ? { donor: true } : undefined
+  }));
+}
 
-  // Update donor statistics
-  const Donor = mongoose.model('Donor');
-  const donor = await Donor.findById(this.donor);
-  if (donor) {
-    await donor.recordDonation(this.amount);
-  }
+async function findByHubtelSessionId(hubtelSessionId) {
+  return toPlain(await getClient().donation.findFirst({ where: { hubtelSessionId } }));
+}
 
-  return this;
-};
+async function findByHubtelOrderId(hubtelOrderId) {
+  return toPlain(await getClient().donation.findFirst({ where: { hubtelOrderId } }));
+}
 
 /**
- * Mark donation as failed
+ * Most recent pending one-time donation for a phone number
+ * (fallback match for Hubtel payment callbacks)
  */
-donationSchema.methods.markFailed = async function(callbackData, errorMessage) {
-  this.status = 'failed';
-  this.callbackData = callbackData;
-  this.errorMessage = errorMessage || 'Payment failed';
-  await this.save();
-  return this;
-};
+async function findLatestPendingOnceByPhone(phoneNumber) {
+  return toPlain(await getClient().donation.findFirst({
+    where: { phoneNumber, frequency: 'once', status: 'pending' },
+    orderBy: { createdAt: 'desc' }
+  }));
+}
 
 /**
- * Get donations by status
+ * Store Hubtel's payment SessionId / OrderId (only the values provided)
  */
-donationSchema.statics.findByStatus = function(status) {
-  return this.find({ status }).sort({ createdAt: -1 });
-};
+async function setHubtelIds(id, { hubtelSessionId, hubtelOrderId }) {
+  const data = {};
+  if (hubtelSessionId) data.hubtelSessionId = hubtelSessionId;
+  if (hubtelOrderId) data.hubtelOrderId = hubtelOrderId;
+  if (Object.keys(data).length === 0) return;
+  await getClient().donation.update({ where: { id }, data });
+}
 
 /**
- * Get donations for a specific phone number
+ * Mark donation completed and update donor statistics — in one transaction.
+ *
+ * Idempotent: a repeated payment callback for an already-completed donation
+ * does not count the donor's total twice.
  */
-donationSchema.statics.findByPhone = function(phoneNumber) {
-  return this.find({ phoneNumber }).sort({ createdAt: -1 });
-};
+async function markCompleted(id, callbackData) {
+  const transactionId = callbackData?.Data?.TransactionId;
 
-/**
- * Get total donations for a period
- */
-donationSchema.statics.getTotalForPeriod = async function(startDate, endDate) {
-  const result = await this.aggregate([
-    {
-      $match: {
-        status: { $in: ['completed', 'fulfilled'] },
-        $or: [
-          { completedAt: { $gte: startDate, $lte: endDate } },
-          { fulfilledAt: { $gte: startDate, $lte: endDate } }
-        ]
+  return getClient().$transaction(async (tx) => {
+    const updated = await tx.donation.updateMany({
+      where: { id, status: { not: 'completed' } },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        callbackData: jsonOrNull(callbackData),
+        ...(transactionId ? { hubtelTransactionId: String(transactionId) } : {})
       }
-    },
-    {
-      $group: {
-        _id: null,
-        total: { $sum: '$amount' },
-        count: { $sum: 1 }
-      }
+    });
+
+    const donation = await tx.donation.findUnique({ where: { id } });
+
+    if (updated.count === 1 && donation) {
+      await Donor.recordDonation(donation.donorId, donation.amount, tx);
     }
-  ]);
 
-  return result[0] || { total: 0, count: 0 };
+    return toPlain(donation);
+  });
+}
+
+async function markFailed(id, callbackData, errorMessage) {
+  return toPlain(await getClient().donation.update({
+    where: { id },
+    data: {
+      status: 'failed',
+      callbackData: jsonOrNull(callbackData),
+      errorMessage: typeof errorMessage === 'string' ? errorMessage : (errorMessage ? JSON.stringify(errorMessage) : 'Payment failed')
+    }
+  }));
+}
+
+/**
+ * Mark fulfilled (Hubtel fulfilment callback). Single atomic statement:
+ * sets completedAt only if not already set (fulfilment can arrive before the
+ * payment callback), and only touches donations not yet fulfilled.
+ *
+ * @returns {Promise<string|null>} id of the fulfilled donation, or null
+ */
+async function markFulfilledByHubtelSessionId(hubtelSessionId) {
+  const now = new Date(); // app clock — DB NOW() can be skewed from the app's
+  const rows = await getClient().$queryRaw`
+    UPDATE "donations"
+    SET "status" = 'fulfilled', "fulfilledAt" = ${now},
+        "completedAt" = COALESCE("completedAt", ${now}), "updatedAt" = ${now}
+    WHERE "hubtelSessionId" = ${hubtelSessionId} AND "fulfilledAt" IS NULL
+    RETURNING "id"`;
+  return rows[0] ? rows[0].id : null;
+}
+
+async function markFulfilledByHubtelOrderId(hubtelOrderId) {
+  const now = new Date(); // app clock — DB NOW() can be skewed from the app's
+  const rows = await getClient().$queryRaw`
+    UPDATE "donations"
+    SET "status" = 'fulfilled', "fulfilledAt" = ${now},
+        "completedAt" = COALESCE("completedAt", ${now}), "updatedAt" = ${now}
+    WHERE "hubtelOrderId" = ${hubtelOrderId} AND "fulfilledAt" IS NULL
+    RETURNING "id"`;
+  return rows[0] ? rows[0].id : null;
+}
+
+async function list(filters = {}, { skip = 0, limit = 100, includeDonor = false, includeSubscription = false } = {}) {
+  const include = {};
+  if (includeDonor) include.donor = true;
+  if (includeSubscription) include.subscription = true;
+
+  return toPlain(await getClient().donation.findMany({
+    where: buildWhere(filters),
+    orderBy: { createdAt: 'desc' },
+    skip,
+    take: limit,
+    include: Object.keys(include).length ? include : undefined
+  }));
+}
+
+async function count(filters = {}) {
+  return getClient().donation.count({ where: buildWhere(filters) });
+}
+
+async function countCompleted() {
+  return getClient().donation.count({ where: { status: { in: COMPLETED_STATUSES } } });
+}
+
+/**
+ * Total completed/fulfilled donations within a period
+ */
+async function getTotalForPeriod(startDate, endDate) {
+  const result = await getClient().donation.aggregate({
+    where: {
+      status: { in: COMPLETED_STATUSES },
+      OR: [
+        { completedAt: { gte: startDate, lte: endDate } },
+        { fulfilledAt: { gte: startDate, lte: endDate } }
+      ]
+    },
+    _sum: { amount: true },
+    _count: { _all: true }
+  });
+
+  return {
+    total: result._sum.amount ? result._sum.amount.toNumber() : 0,
+    count: result._count._all
+  };
+}
+
+module.exports = {
+  create,
+  findById,
+  findByReference,
+  findByHubtelSessionId,
+  findByHubtelOrderId,
+  findLatestPendingOnceByPhone,
+  setHubtelIds,
+  markCompleted,
+  markFailed,
+  markFulfilledByHubtelSessionId,
+  markFulfilledByHubtelOrderId,
+  list,
+  count,
+  countCompleted,
+  getTotalForPeriod
 };
-
-const Donation = mongoose.model('Donation', donationSchema);
-
-module.exports = Donation;

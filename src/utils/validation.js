@@ -8,13 +8,16 @@ const paymentCallbackSchema = z.object({
   OrderId: z.string().optional(),
   ResponseCode: z.string().optional(),
   Status: z.string().optional(),
+  // Nested objects use .passthrough(): Zod strips unknown keys by default and
+  // validateBody replaces req.body, which silently deleted OrderInfo.CustomerName
   OrderInfo: z.object({
     CustomerMobileNumber: z.string().optional(),
+    CustomerName: z.string().optional(),
     Payment: z.object({
       IsSuccessful: z.boolean().optional()
-    }).optional(),
+    }).passthrough().optional(),
     Status: z.string().optional()
-  }).optional(),
+  }).passthrough().optional(),
   Data: z.object({
     ResponseCode: z.string().optional(),
     Status: z.string().optional()

@@ -138,6 +138,29 @@ describe('Security Middleware Tests', () => {
     });
   });
 
+  describe('paymentCallbackSchema', () => {
+    test('keeps OrderInfo.CustomerName and other nested Hubtel fields (regression: were stripped)', async () => {
+      app.post('/validate', validateBody(paymentCallbackSchema), (req, res) => res.status(200).json(req.body));
+
+      const res = await request(app)
+        .post('/validate')
+        .send({
+          SessionId: 's',
+          OrderInfo: {
+            CustomerMobileNumber: '233244123456',
+            CustomerName: 'Ama Mensah',
+            CustomerEmail: 'ama@example.com',
+            Payment: { IsSuccessful: true, AmountPaid: 5 }
+          }
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.OrderInfo.CustomerName).toBe('Ama Mensah');
+      expect(res.body.OrderInfo.CustomerEmail).toBe('ama@example.com');
+      expect(res.body.OrderInfo.Payment.AmountPaid).toBe(5);
+    });
+  });
+
   describe('pagination helpers', () => {
     test('caps limit and rejects junk', () => {
       expect(parsePagination({ limit: '9999999' })).toEqual({ limit: 500, skip: 0 });
